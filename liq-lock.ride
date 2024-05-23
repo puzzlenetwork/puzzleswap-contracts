@@ -1,0 +1,118 @@
+{-# STDLIB_VERSION 6 #-}
+{-# CONTENT_TYPE DAPP #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+
+let oracleAddress = getString("setup_unlockOracle").valueOrElse("").addressFromString().valueOrElse(Address(base58'3P9xX849YJXg7C87v82cDyDy5VhKiPJpHo8'))
+# TODO: make oracle call releaseAchievement for all existing lock_LOCKID_status = 1
+
+func getPrice(pool: Address, asset0: String, asset1: String) = {
+  let bal0 = getIntegerValue(pool, "global_"+asset0+"_balance")
+  let bal1 = getIntegerValue(pool, "global_"+asset1+"_balance")
+  let weight0 = getIntegerValue(pool, "static_"+asset0+"_weight")
+  let weight1 = getIntegerValue(pool, "static_"+asset1+"_weight")
+
+  let scale = if asset1 == "WAVES" then 100000000 else pow(10, 0, assetInfo(asset1.fromBase58String()).value().decimals, 0, 0, DOWN)
+
+  let price = fraction(fraction(bal0, 10000, weight0), scale, fraction(bal1, 10000, weight1))
+  price
+}
+
+@Callable(i)
+func getPriceREADONLY(poolStr: String, asset0: String, asset1: String) = {
+  let val = getPrice(poolStr.addressFromStringValue(), asset0, asset1)
+  throw(val.toString())
+}
+
+@Callable(i)
+func lockLiquidity(poolId: String, targetPrice: Int, unlockDelay: Int, asset0: String, asset1: String, unlockTo: String) = {
+  let poolAddress = addressFromString(poolId).valueOrErrorMessage("incorrect pool id")
+  let pzId = poolAddress.getBinary("global_poolToken_id").valueOrErrorMessage("pool is not initialized")
+
+  let pmt = i.payments[0]
+
+  if (pmt.assetId != pzId) then {throw("incorrect asset attached to payment")}
+  else if (getStringValue(poolAddress, "static_tokenIds").indexOf(asset0) == unit) then {throw("asset " + asset0 + " is not presented in the pool")}
+  else if (getStringValue(poolAddress, "static_tokenIds").indexOf(asset1) == unit) then {throw("asset " + asset1 + " is not presented in the pool")}
+  # TODO: check that asset0 and asset1 exist in pool
+  else {
+    let amount = pmt.amount
+    let lockId = sha256(i.transactionId + pzId + targetPrice.toBytes() + unlockDelay.toBytes() + amount.toBytes()).toBase58String()
+
+    [
+      IntegerEntry("lock_"+lockId+"_amount", amount),
+      StringEntry("lock_"+lockId+"_pzId", pzId.toBase58String()),
+      StringEntry("lock_"+lockId+"_owner", i.caller.toString()),
+      StringEntry("lock_"+lockId+"_poolId", poolId),
+      StringEntry("lock_"+lockId+"_asset0", asset0),
+      StringEntry("lock_"+lockId+"_asset1", asset1),
+      IntegerEntry("lock_"+lockId+"_amount", amount),
+      IntegerEntry("lock_"+lockId+"_targetPrice", targetPrice),
+      IntegerEntry("lock_"+lockId+"_unlockDelay", unlockDelay),
+      IntegerEntry("lock_"+lockId+"_status", 0) # 1 - achievement requested, 2 - achievement accepted
+    ] ++ if unlockTo != "" then [StringEntry("lock_"+lockId+"_unlockTo", unlockTo)] else []
+  }
+}
+
+@Callable(i)
+func submitAchievement(lockId: String) = {
+  let poolId = getStringValue("lock_"+lockId+"_poolId")
+  let pzId = getStringValue("lock_"+lockId+"_pzId").fromBase58String()
+  let asset0 = getStringValue("lock_"+lockId+"_asset0")
+  let asset1 = getStringValue("lock_"+lockId+"_asset1")
+  let targetPrice = getIntegerValue("lock_"+lockId+"_targetPrice")
+  let status = getIntegerValue("lock_"+lockId+"_status")
+  let unlockTo = getString("lock_"+lockId+"_unlockTo").valueOrElse(i.caller.toString())
+
+  let poolAddress = addressFromStringValue(poolId)
+  let currentPrice = getPrice(poolAddress, asset0, asset1)
+
+  if (currentPrice < targetPrice) then {throw("target price is not reached")}
+  else if (status != 0) then {throw("achievement has already been submitted")}
+  else {
+    [
+      IntegerEntry("lock_"+lockId+"_achievementAt", height),
+      StringEntry("lock_"+lockId+"_unlockTo", unlockTo),
+      IntegerEntry("lock_"+lockId+"_status", 1)
+    ]
+  }
+}
+
+@Callable(i)
+func releaseAchievement(lockId: String) = {
+  let poolId = getStringValue("lock_"+lockId+"_poolId")
+  let pzId = getStringValue("lock_"+lockId+"_pzId").fromBase58String()
+  let asset0 = getStringValue("lock_"+lockId+"_asset0")
+  let asset1 = getStringValue("lock_"+lockId+"_asset1")
+  let targetPrice = getIntegerValue("lock_"+lockId+"_targetPrice")
+  let unlockDelay = getIntegerValue("lock_"+lockId+"_unlockDelay")
+  let unlockAt = getIntegerValue("lock_"+lockId+"_achievementAt") + unlockDelay
+  let unlockTo = getStringValue("lock_"+lockId+"_unlockTo").addressFromStringValue()
+  let amount = getIntegerValue("lock_"+lockId+"_amount")
+  let status = getIntegerValue("lock_"+lockId+"_status")
+
+  let poolAddress = addressFromStringValue(poolId)
+  let currentPrice = getPrice(poolAddress, asset0, asset1)
+
+  if (unlockAt < height) then {throw("unlock delay is still ongoing")}
+  else if (status != 1) then {throw("achievement has not been submitted")}
+  else if (i.caller != oracleAddress) then {throw("whitelist access only, to prevent manipulations")}
+  else if (currentPrice < targetPrice) then {
+    # if price is below target - delete the achievement submission
+    [
+      DeleteEntry("lock_"+lockId+"_achievementAt"),
+      DeleteEntry("lock_"+lockId+"_unlockTo"),
+      IntegerEntry("lock_"+lockId+"_status", 0)
+    ]
+  }
+  else {
+    # if price is above target - approve the achievement and unlock tokens
+    [
+      ScriptTransfer(unlockTo, amount, pzId),
+      IntegerEntry("lock_"+lockId+"_status", 2)
+    ]
+  }
+}
+
+
+@Verifier(tx)
+func verify() = sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
