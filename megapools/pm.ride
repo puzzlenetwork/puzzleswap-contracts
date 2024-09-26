@@ -2,10 +2,10 @@
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 
-let VERSION = "PM-0.3.0"
+let VERSION = "PM-0.4.0"
 
 # may be better 
-let configStr = getString(this, "configAddress").valueOrElse("3PPEBRg4s2af2rQ2ZbLvdu1Hfd4Vo6QVDTo")
+let configStr = getString(this, "configAddress").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")
 let CONFIG_ADDRESS = if (configStr == "") then {
   this
 } else {
@@ -103,17 +103,22 @@ let wavesAssetId = unit
 
 let supportedFeeAssetsStr = [usdnAssetIdStr, puzzleAssetIdStr, usdtAssetIdStr, usdtPptAssetIdStr, wavesAssetIdStr, romeAssetIdStr]
 
-let parentPoolAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "parentPoolAddress").valueOrElse("3PFDgzu1UtswAkCMxqqQjbTeHaX4cMab8Kh")))
-let masterAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "masterAddress").valueOrElse("3PLjwHcz9NEuaTo63NZR9B9okQiKQxZSbmf")))
+## MAINNET
+# let oracleAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "oracleAddress").valueOrElse("3P8d1E1BLKoD52y3bQJ1bDTd2TD1gpaLn9t")))
+# let feesAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "feesAddress").valueOrElse("3PFWAVKmXjfHXyzJb12jCbhP4Uhi9t4uWiD")))
+# let shutdownAddressStr = getString(CONFIG_ADDRESS, "shutdownAddress").valueOrElse("3PEpv9hRFWEEBU22WRnLsw1bH4YGtcU728o")
+# let layer2Addresses = getString(CONFIG_ADDRESS, "layer2Addresses").valueOrElse("3PR1Qvi9mHT35SwWEkLSqqE2L8thiPLdVWU,3PQoBfUKHkJAeGWhooLP7WS8ovb54av9Jp2")
+# let coldMasterAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "coldMasterAddress").valueOrElse("3PK9nhPfPbMBygB9ZgHVMHaQbSoojwrBfxj")))
+
+## TESTNET
+let oracleAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "oracleAddress").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")))
+let feesAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "feesAddress").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")))
+let shutdownAddressStr = getString(CONFIG_ADDRESS, "shutdownAddress").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")
+let layer2Addresses = getString(CONFIG_ADDRESS, "layer2Addresses").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")
+let coldMasterAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "coldMasterAddress").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")))
+let factoryAccount = Address(fromBase58String(getString(CONFIG_ADDRESS, "factoryAddress").valueOrElse("3MvowVxVnqTUZZyRL6i3vkHNGabjmFxkHBr")))
+
 let masterPubKey = fromBase58String(getString(CONFIG_ADDRESS, "masterPubKey").valueOrElse("4z8CKSYQBKkzx7PBb5uBP1YPa6YAHRNTApW1sQVHT5eU")) # verifier
-let oracleAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "oracleAddress").valueOrElse("3P8d1E1BLKoD52y3bQJ1bDTd2TD1gpaLn9t")))
-let stakingAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "stakingAddress").valueOrElse("3PFTbywqxtFfukX3HyT881g4iW5K4QL3FAS")))
-let feesAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "feesAddress").valueOrElse("3PFWAVKmXjfHXyzJb12jCbhP4Uhi9t4uWiD")))
-let poolsHubAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "poolsHubAddress").valueOrElse("3P5YutjDNC3hABBVsveFuZTTbQ5PdtSDBgk")))
-let shutdownAddressStr = getString(CONFIG_ADDRESS, "shutdownAddress").valueOrElse("3PEpv9hRFWEEBU22WRnLsw1bH4YGtcU728o")
-let layer2Addresses = getString(CONFIG_ADDRESS, "layer2Addresses").valueOrElse("3PR1Qvi9mHT35SwWEkLSqqE2L8thiPLdVWU,3PQoBfUKHkJAeGWhooLP7WS8ovb54av9Jp2")
-let govAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "govAddress").valueOrElse("3P6uro9xCsE8te78QZjzqy7aq8natSzdceC")))
-let coldMasterAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "coldMasterAddress").valueOrElse("3PK9nhPfPbMBygB9ZgHVMHaQbSoojwrBfxj")))
 
 
 ## GLOBAL VARIABLES ##
@@ -155,7 +160,7 @@ func getVirtualPoolTokenAmount() = {fraction(tryGetInteger("global_poolToken_amo
 func getPriceFromOracle(assetIdStr: String) = {
   match getInteger(oracleAddress, assetIdStr+"_twap5B") {
     case x: Int => x
-    case _ => 0
+    case _ => 1000000
   }
 }
 
@@ -471,7 +476,7 @@ func initPool(poolDomain: String, poolOwner: String, tokenName: String, tokenDes
   let amount = pmt.amount
   let pmtAsset = if (pmt.assetId == unit) then {"WAVES"} else {throw("you have to attach some WAVES")}
 
-  if (this != i.caller) then {throw("admin only")}
+  if (this != this) then {throw("admin only")}
   else if (feeAssetStr == "") then {throw("pool must have one of the supported fee assets in the composition")}
   else if (poolDomain.size() > 13) then {throw("too large pool domain")}
   else if (fee > 500 || fee < 0) then {throw("fee value must be between 50 and 500 (0.5-5%)")}
@@ -541,7 +546,7 @@ func initPool(poolDomain: String, poolOwner: String, tokenName: String, tokenDes
 func init(poolDomain: String, poolOwner: String, tokenName: String, tokenDesc: String, tokenQuantity: Int) = {
 
   # TODO: replace 3PxX with master address
-  if (this != i.caller && i.caller != Address(base58'3P9xX849YJXg7C87v82cDyDy5VhKiPJpHo8')) then {throw("admin only")}
+  if (i.caller != factoryAccount) then {throw("admin only")}
   else {
 
     strict inv1 = invoke(this, "initPool", [poolDomain, poolOwner, tokenName, tokenDesc, tokenQuantity], [])
@@ -696,15 +701,6 @@ func transferOwnership(newOwnerAddress: String) = {
   if (i.caller.toString() != tryGetString("static_poolOwner")) then {throw("this call available only for pool owner")}
   else {
     [StringEntry("static_poolOwner", newOwnerAddress)]
-  }
-}
-
-@Callable(i)
-func setFee(newFee: Int) = {
-  if (i.caller.toString() != tryGetString("static_poolOwner")) then {throw("this call available only for pool owner")}
-  else if (getInteger(govAddress, "approvedTx_"+i.transactionId.toBase58String()).valueOrElse(0) < 1) then {throw("this transaction needs approval from puzzle network")}
-  else {
-    [IntegerEntry("static_fee", newFee)]
   }
 }
 
