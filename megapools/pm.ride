@@ -116,7 +116,7 @@ let feesAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "feesAddres
 let shutdownAddressStr = getString(CONFIG_ADDRESS, "shutdownAddress").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")
 let layer2Addresses = getString(CONFIG_ADDRESS, "layer2Addresses").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")
 let coldMasterAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "coldMasterAddress").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")))
-let factoryAccount = Address(fromBase58String(getString(CONFIG_ADDRESS, "factoryAddress").valueOrElse("3MvowVxVnqTUZZyRL6i3vkHNGabjmFxkHBr")))
+let factoryAccount = Address(fromBase58String(getString(CONFIG_ADDRESS, "factoryAddress").valueOrElse("3N1ytAUyhtig9X6F2hHHs1jbzYxr47Yp8Fr")))
 
 let masterPubKey = fromBase58String(getString(CONFIG_ADDRESS, "masterPubKey").valueOrElse("4z8CKSYQBKkzx7PBb5uBP1YPa6YAHRNTApW1sQVHT5eU")) # verifier
 
