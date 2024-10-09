@@ -1,11 +1,13 @@
 {-# STDLIB_VERSION 6 #-}
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
+{-# IMPORT artifacts/mainnet.ride #-}
 
-let VERSION = "LiL-2.0.0"
+
+let VERSION = "LiL-2.0.2"
 let DESCRIPTION = "Locks liquidity until the certain price target gets reached. After the target, token is distributed to holders."
 
-let oracleAddress = getString("setup_unlockOracle").valueOrElse("3PFiEpa8rfsTNvNeLkqJzdBTtUjJXHXLCuU").addressFromString().valueOrElse(Address(base58'3PFiEpa8rfsTNvNeLkqJzdBTtUjJXHXLCuU'))
+let oracleAddress = getString("setup_unlockOracle").valueOrElse("3PEYw8BkEzYwk4NXEDdDDAanyduYZPCEbYr").addressFromString().valueOrElse(Address(base58'3PFiEpa8rfsTNvNeLkqJzdBTtUjJXHXLCuU'))
 # TODO: make oracle call releaseAchievement for all existing lock_LOCKID_status = 1
 
 func getAssetString(assetId: ByteVector|Unit) = {
@@ -127,13 +129,13 @@ func releaseAchievement(lockId: String) = {
     # 1 - unwrap LPs
     strict asset0Before = getTokenBalance(asset0.getAssetBytes())
     strict asset1Before = getTokenBalance(asset1.getAssetBytes())
-    strict inv = invoke(poolAddress, "redeemIndex", [], [AttachedPayment(pzId, amount)])
+    strict inv = invoke(poolAddress, "redeemIndex", [false], [AttachedPayment(pzId, amount)])
 
     # 2 - burn asset1
     let res1 = [Burn(asset1.getAssetBytes().value(), getTokenBalance(asset1.getAssetBytes()) - asset1Before)]
 
     # 3 - distribute asset0
-    strict inv2 = invoke(Address(base58'3PBf2jd3ZEPX7NHQvVarscTjLQ8bk43uAfn'), "airdrop", [], [AttachedPayment(asset0.getAssetBytes(), getTokenBalance(asset0.getAssetBytes()) - asset0Before)])
+    strict inv2 = invoke(Address(base58'3PBf2jd3ZEPX7NHQvVarscTjLQ8bk43uAfn'), "airdropUSDT", [], [AttachedPayment(asset0.getAssetBytes(), getTokenBalance(asset0.getAssetBytes()) - asset0Before)])
     let res2 = []
 
     [
@@ -142,6 +144,3 @@ func releaseAchievement(lockId: String) = {
   }
 }
 
-
-@Verifier(tx)
-func verify() = sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
