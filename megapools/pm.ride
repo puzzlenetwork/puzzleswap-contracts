@@ -4,7 +4,7 @@
 {-# IMPORT artifacts/mainnet.ride #-}
 
 
-let VERSION = "PM-0.5.0"
+let VERSION = "PM-0.6.0"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")
@@ -22,7 +22,6 @@ let Scale16 = 10000000000000000
 let FeeScale = 10000
 let PoolTokenDecimals = 8
 let PoolTokenScale = pow(10, 0, PoolTokenDecimals, 0, 0, HALFUP)
-let InitalWavesLiquidity = Scale8
 
 # rebalance constants 
 let MIN_STEPS_AMOUNT = getInteger(CONFIG_ADDRESS, "min_steps_amount").valueOrElse(1)
@@ -134,6 +133,22 @@ let earnedAssets = assetIds
 
 
 ## UTIL METHODS ##
+
+func getPoolStatus() = {
+  let address = getString(factoryAccount, "factory__address").valueOrElse("").addressFromString().valueOrElse(factoryAccount)
+  let poolId = getString(address, "pool__" + this.toString()).valueOrElse("")
+  let status = getInteger(address, "pool__" + poolId).valueOrElse(2)
+
+  status
+}
+
+func getSetting(key: String) = {
+  let address = getString(factoryAccount, "factory__address").valueOrElse("").addressFromString().valueOrElse(factoryAccount)
+  address.getIntegerValue("setup__"+key)
+}
+let InitalWavesLiquidity = getSetting("virtualLiquidity")
+let CreationFee = getSetting("creationFee")
+let CurveTarget = getSetting("curveTarget")
 
 func isShutdown() = {
   let shutdownAddress = addressFromString(shutdownAddressStr)
@@ -435,7 +450,7 @@ func init(poolDomain: String, poolOwner: String, tokenName: String, tokenDesc: S
     strict inv1 = invoke(this, "initPool", [poolDomain, poolOwner, tokenName, tokenDesc, tokenQuantity], [])
     let memeIdStr = inv1.exactAs[String]
     
-    swapInternal("WAVES", memeIdStr, i.payments[0].amount-InitalWavesLiquidity, 0, i.caller.toString())._1
+    swapInternal("WAVES", memeIdStr, i.payments[0].amount-CreationFee, 0, i.caller.toString())._1
   
   }
 }
@@ -456,14 +471,21 @@ func evaluateClaim(user: String) = {
 
 @Callable(i)
 func swap(assetOut: String, minimum: Int) = {
-  # TODO: validate finish status is not there
+  let status = getPoolStatus()
 
-  let pmt = if (i.payments.size() == 1) then {i.payments[0].value()} else {throw("please attach exactly one payment")}
-  let AmountIn = i.payments[0].amount.value()
-  let AssetIn = i.payments[0].assetId
-  swapInternal(AssetIn.getAssetString(), assetOut, AmountIn, minimum, i.caller.toString())
+  if (status < 2) then {
+    let pmt = if (i.payments.size() == 1) then {i.payments[0].value()} else {throw("please attach exactly one payment")}
+    let AmountIn = i.payments[0].amount.value()
+    let AssetIn = i.payments[0].assetId
+    let res = swapInternal(AssetIn.getAssetString(), assetOut, AmountIn, minimum, i.caller.toString())
 
-  # TODO: if reaches target, set finish status
+    if (getIntegerValue("global_WAVES_balance") > CurveTarget) then {
+      strict notifyInv = invoke(factoryAccount, "notifyStatusUpdate", [2], [])
+      res
+    } else res
+  } else {
+    throw("pool is stopped: most probably it reached the target liquidity")
+  }
 }
 
 @Callable(i)
