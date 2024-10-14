@@ -1,10 +1,10 @@
 {-# STDLIB_VERSION 6 #-}
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
-{-# IMPORT artifacts/mainnet.ride #-}
+{-# IMPORT artifacts/testnet.ride #-}
 
 
-let VERSION = "PM-0.6.0"
+let VERSION = "PM-0.7.0"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")
@@ -117,7 +117,8 @@ let feesAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "feesAddres
 let shutdownAddressStr = getString(CONFIG_ADDRESS, "shutdownAddress").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")
 let layer2Addresses = getString(CONFIG_ADDRESS, "layer2Addresses").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")
 let coldMasterAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "coldMasterAddress").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")))
-let factoryAccount = Address(fromBase58String(getString(CONFIG_ADDRESS, "factoryAddress").valueOrElse("3N1ytAUyhtig9X6F2hHHs1jbzYxr47Yp8Fr")))
+let calculatorAccount = Address(fromBase58String(getString(CONFIG_ADDRESS, "factoryAddress").valueOrElse("3N1ytAUyhtig9X6F2hHHs1jbzYxr47Yp8Fr")))
+let factoryAccount = Address(fromBase58String(getString(CONFIG_ADDRESS, "factoryAddress").valueOrElse("3MsgzbtRg8NEkbTcHBywtwTdCe9BRxMQo5T")))
 
 let masterPubKey = fromBase58String(getString(CONFIG_ADDRESS, "masterPubKey").valueOrElse("4z8CKSYQBKkzx7PBb5uBP1YPa6YAHRNTApW1sQVHT5eU")) # verifier
 
@@ -135,16 +136,14 @@ let earnedAssets = assetIds
 ## UTIL METHODS ##
 
 func getPoolStatus() = {
-  let address = getString(factoryAccount, "factory__address").valueOrElse("").addressFromString().valueOrElse(factoryAccount)
-  let poolId = getString(address, "pool__" + this.toString()).valueOrElse("")
-  let status = getInteger(address, "pool__" + poolId).valueOrElse(2)
+  let poolId = getString(factoryAccount, "pool__" + this.toString()).valueOrElse("")
+  let status = getInteger(factoryAccount, "pool__" + poolId).valueOrElse(2)
 
   status
 }
 
 func getSetting(key: String) = {
-  let address = getString(factoryAccount, "factory__address").valueOrElse("").addressFromString().valueOrElse(factoryAccount)
-  address.getIntegerValue("setup__"+key)
+  factoryAccount.getIntegerValue("setup__"+key)
 }
 let InitalWavesLiquidity = getSetting("virtualLiquidity")
 let CreationFee = getSetting("creationFee")
@@ -374,7 +373,7 @@ func initPool(poolDomain: String, poolOwner: String, tokenName: String, tokenDes
   let amount = pmt.amount
   let pmtAsset = if (pmt.assetId == unit) then {"WAVES"} else {throw("you have to attach some WAVES")}
 
-  if (this != this) then {throw("admin only")}
+  if (this != this) then {throw("self-invoke only")}
   else if (feeAssetStr == "") then {throw("pool must have one of the supported fee assets in the composition")}
   else if (poolDomain.size() > 13) then {throw("too large pool domain")}
   else if (fee > 500 || fee < 0) then {throw("fee value must be between 50 and 500 (0.5-5%)")}
@@ -443,7 +442,6 @@ func initPool(poolDomain: String, poolOwner: String, tokenName: String, tokenDes
 @Callable(i)
 func init(poolDomain: String, poolOwner: String, tokenName: String, tokenDesc: String, tokenQuantity: Int) = {
 
-  # TODO: replace 3PxX with master address
   if (i.caller != factoryAccount) then {throw("admin only")}
   else {
 
