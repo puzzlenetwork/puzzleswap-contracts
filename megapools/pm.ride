@@ -6,7 +6,7 @@
 
 
 
-let VERSION = "PM-0.7.0"
+let VERSION = "PM-0.8.0"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")
@@ -138,8 +138,8 @@ let earnedAssets = assetIds
 ## UTIL METHODS ##
 
 func getPoolStatus() = {
-  let poolId = getString(factoryAccount, "pool__" + this.toString()).valueOrElse("")
-  let status = getInteger(factoryAccount, "pool__" + poolId).valueOrElse(2)
+  let poolId = getInteger(factoryAccount, "pool__" + this.toString()).valueOrElse(0)
+  let status = getInteger(factoryAccount, "pool__status__" + poolId.toString()).valueOrElse(2)
 
   status
 }
