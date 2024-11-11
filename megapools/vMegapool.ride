@@ -1,9 +1,11 @@
 {-# STDLIB_VERSION 6 #-}
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
+{-# IMPORT artifacts/mainnet.ride #-}
 
 
-let VERSION = "PZ-2.0.1 PROD"
+
+let VERSION = "PZ-2.0.2 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMyZZZZe7v4L6VGQ9asSeaxLR9kdcj1FEj")
@@ -636,7 +638,6 @@ func evaluateClaim(user: String) = {
 func swap(assetOut: String, minimum: Int) = {
   # throw("stop")
   # markup all assets
-  
   let pmt = if (i.payments.size() == 1) then {i.payments[0].value()} else {throw("please attach exactly one payment")}
   let AmountIn = i.payments[0].amount.value()
   let AssetIn = pmt.assetId
@@ -644,8 +645,6 @@ func swap(assetOut: String, minimum: Int) = {
   let assetIn = getAssetString(AssetIn)
   let scaleIn = Scale8 / tryGetInteger("static_" + assetIn + "_scale")
   let scaleOut = Scale8 / tryGetInteger("static_" + assetOut + "_scale")
-  let feeAssetOutStr = tryGetString("static_feeToken")
-  let feeAssetOut = if (feeAssetOutStr == "") then {usdnAssetId} else {feeAssetOutStr.getAssetBytes()} # ???
   
   # markup all asset numbers
   let AssetInBalance = tryGetInteger("global_"+AssetIn.getAssetString()+"_balance")
@@ -661,13 +660,6 @@ func swap(assetOut: String, minimum: Int) = {
   let AmountOut = fraction(AmountOut1, 1, scaleOut)
   let AssetOutBalance2 = AssetOutBalance - AmountOut
   let AssetInBalance2 = AssetInBalance + cleanAmountIn
-
-  let feeAssetOutBalance = 
-                            if (feeAssetOut == AssetIn) then {AssetInBalance2} 
-                            else if (feeAssetOut == AssetOut) then {AssetOutBalance2} 
-                            else {tryGetInteger("global_"+feeAssetOut.getAssetString()+"_balance")}
-    
-  let feeAmountOut = calculateOutAmount(feeAmountIn, AssetIn, feeAssetOut, AssetInBalance, feeAssetOutBalance)
 
   # do all the verifications
   # TODO: verification that realPrice <= marketPrice (just in case)
@@ -685,20 +677,15 @@ func swap(assetOut: String, minimum: Int) = {
   }
   else {
     # top up protocol fee
-    let creatorFee = fraction(feeAmountOut, 1, 10)
-    let protocolFee = fraction(feeAmountOut, 9, 10)
+    let protocolFee = fraction(feeAmountIn, 10, 10)
   
     # calculate state changes
     let newBalanceIn = AssetInBalance2
-    let newBalanceOut = AssetOutBalance2 - (if (AssetOut == feeAssetOut) then {feeAmountOut} else {0})
-    let newBalanceFeeAsset = if (feeAssetOut != AssetIn && feeAssetOut != AssetOut) then {feeAssetOutBalance - feeAmountOut} else {unit}
+    let newBalanceOut = AssetOutBalance2
 
     # prepare state changes
     let assetInChange = IntegerEntry("global_"+AssetIn.getAssetString()+"_balance", newBalanceIn)
     let assetOutChange = IntegerEntry("global_"+assetOut+"_balance", newBalanceOut)
-    let feeAssetOutChange = if (newBalanceFeeAsset != unit) 
-                            then {IntegerEntry("global_"+feeAssetOut.getAssetString()+"_balance", newBalanceFeeAsset.value())} 
-                            else {StringEntry("hello", "world")}
 
     let volumeUsdUpdate = calculateUsdValue(AssetIn, AmountIn, AssetInBalance)
 
@@ -707,20 +694,15 @@ func swap(assetOut: String, minimum: Int) = {
         # change state with new balance values
         assetOutChange,
         assetInChange,
-        feeAssetOutChange,
 
         # send amountOut to the user
         ScriptTransfer(i.caller, AmountOut, AssetOut),
-
-        # send fee to the pool creator
-        ScriptTransfer(tryGetString("static_poolOwner").addressFromStringValue(), creatorFee, feeAssetOut),
-        IntegerEntry("global_earnedByOwner", tryGetInteger("global_earnedByOwner") + creatorFee),
 
         # update volume stats
         IntegerEntry("global_volume_usd", tryGetInteger("global_volume_usd") + volumeUsdUpdate),
 
         # send platform fee
-        ScriptTransfer(feesAddress, protocolFee, feeAssetOut)
+        ScriptTransfer(feesAddress, protocolFee, assetIn.getAssetBytes())
       ], 
       AmountOut
     )
