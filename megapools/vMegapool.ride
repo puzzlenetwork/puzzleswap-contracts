@@ -1,11 +1,9 @@
 {-# STDLIB_VERSION 6 #-}
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
-{-# IMPORT artifacts/mainnet.ride #-}
 
 
-
-let VERSION = "PZ-2.0.2 PROD"
+let VERSION = "PZ-2.0.3 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMyZZZZe7v4L6VGQ9asSeaxLR9kdcj1FEj")
