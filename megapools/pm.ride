@@ -450,7 +450,7 @@ func init(poolDomain: String, poolOwner: String, tokenName: String, tokenDesc: S
     strict inv1 = invoke(this, "initPool", [poolDomain, poolOwner, tokenName, tokenDesc, tokenQuantity], [])
     let memeIdStr = inv1.exactAs[String]
     
-    swapInternal("WAVES", memeIdStr, i.payments[0].amount-CreationFee, 0, i.caller.toString())._1
+    swapInternal("WAVES", memeIdStr, i.payments[0].amount-CreationFee, 0, i.originCaller.toString())._1
   
   }
 }
