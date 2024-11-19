@@ -1,0 +1,572 @@
+{-# STDLIB_VERSION 6 #-}
+{-# CONTENT_TYPE DAPP #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+{-# IMPORT artifacts/mainnet.ride #-}
+
+let VERSION = "PM-0.8.1-PROD"
+
+let configStr = getString(this, "configAddress").valueOrElse("3PPEBRg4s2af2rQ2ZbLvdu1Hfd4Vo6QVDTo")
+let CONFIG_ADDRESS = if (configStr == "") then {
+  this
+} else {
+  Address(fromBase58String(configStr))
+}
+
+## CONSTANTS ##
+let AssetsWeightsDecimals = 4
+let Scale = 10000
+let Scale8 = 100000000
+let Scale16 = 10000000000000000
+let FeeScale = 10000
+let PoolTokenDecimals = 8
+let PoolTokenScale = pow(10, 0, PoolTokenDecimals, 0, 0, HALFUP)
+
+# rebalance constants 
+let MIN_STEPS_AMOUNT = getInteger(CONFIG_ADDRESS, "min_steps_amount").valueOrElse(1)
+let MAX_STEPS_AMOUNT = getInteger(CONFIG_ADDRESS, "max_steps_amount").valueOrElse(500)
+let MIN_STEPS_INTERVAL = getInteger(CONFIG_ADDRESS, "min_steps_interval").valueOrElse(1)
+let MAX_STEPS_INTERVAL = getInteger(CONFIG_ADDRESS, "max_steps_interval").valueOrElse(10000)
+let MIN_WEIGHT = getInteger(CONFIG_ADDRESS, "min_weight").valueOrElse(100)
+let MAX_WEIGHT = getInteger(CONFIG_ADDRESS, "max_weight").valueOrElse(9900)
+
+
+## HELPER METHODS ##
+func tryGetInteger(key: String) = {
+  match getInteger(this, key) {
+      case b:Int => b
+      case _ => 0
+  }
+}
+
+func tryGetBinary(key: String) = {
+  match getBinary(this, key) {
+      case b:ByteVector => b
+      case _ => base58''
+  }
+}
+
+func tryGetString(key: String) = {
+  match getString(this, key) {
+      case b:String => b
+      case _ => ""
+  }
+}
+
+func tryGetStringOrThrow(key: String) = {
+  match getString(this, key) {
+      case b:String => b
+      case _ => throw("no such key in data storage: " + key)
+  }
+}
+
+func getAssetString(assetId: ByteVector|Unit) = {
+  match assetId {
+    case b:ByteVector => b.toBase58String()
+    case _ => "WAVES"
+  }
+}
+
+func getAssetBytes(assetIdStr: String) = {
+  if (assetIdStr == "WAVES") then {unit} else {assetIdStr.fromBase58String()}
+}
+
+func getTokenBalance(assetId: ByteVector|Unit) = {
+  match (assetId) {
+      case t:ByteVector => assetBalance(this, t)
+      case _ => wavesBalance(this).available
+    }
+}
+
+func addAssetBytesToList(accum: List[ByteVector|Unit], item: String) = { accum ++ [item.getAssetBytes()] }
+func addAssetWeightToList(accum: List[Int], item: ByteVector|Unit) = { accum ++ [tryGetInteger("static_" + item.getAssetString() + "_weight")] }
+func addAssetWeightToStrList(accum: List[String], item: String) = { accum ++ [tryGetInteger("static_" + item + "_weight").toString()] }
+func addAssetDecimalsToList(accum: List[Int], item: ByteVector|Unit) = { accum ++ [tryGetInteger("static_" + item.getAssetString() + "_decimals")] }
+func addAssetScaleToList(accum: List[Int], item: ByteVector|Unit) = { accum ++ [tryGetInteger("static_" + item.getAssetString() + "_scale")] }
+func addIntToList(accum: List[Int], item: String) = { accum ++ [item.parseIntValue()] }
+
+
+## CONFIG ##
+let usdnAssetIdStr = getString(CONFIG_ADDRESS, "usdnAssetIdStr").valueOrElse("DG2xFkPdDwKUoBkzGAhQtLpSGzfXLiCYPEzeKH2Ad24p")
+let puzzleAssetIdStr = getString(CONFIG_ADDRESS, "puzzleAssetIdStr").valueOrElse("HEB8Qaw9xrWpWs8tHsiATYGBWDBtP2S7kcPALrMu43AS")
+let usdtAssetIdStr = getString(CONFIG_ADDRESS,  "usdtAssetIdStr").valueOrElse("34N9YcEETLWn93qYQ64EsP1x89tSruJU44RrEMSXXEPJ")
+let usdtPptAssetIdStr = getString(CONFIG_ADDRESS, "usdtPptAssetIdStr").valueOrElse("9wc3LXNA4TEBsXyKtoLE9mrbDD7WMHXvXrCjZvabLAsi")
+let romeAssetIdStr = getString(CONFIG_ADDRESS, "romeAssetIdStr").valueOrElse("AP4Cb5xLYGH6ZigHreCZHoXpQTWDkPsG2BHqfDUx6taJ")
+let wavesAssetIdStr = "WAVES"
+
+let usdnAssetId = fromBase58String(usdnAssetIdStr)
+let puzzleAssetId = fromBase58String(puzzleAssetIdStr)
+let usdtAssetId = fromBase58String(usdtAssetIdStr)
+let usdtPptAssetId = fromBase58String(usdtPptAssetIdStr)
+let romeAssetId = fromBase58String(romeAssetIdStr)
+let wavesAssetId = unit
+
+let supportedFeeAssetsStr = [usdnAssetIdStr, puzzleAssetIdStr, usdtAssetIdStr, usdtPptAssetIdStr, wavesAssetIdStr, romeAssetIdStr]
+
+## MAINNET
+let oracleAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "oracleAddress").valueOrElse("3P8d1E1BLKoD52y3bQJ1bDTd2TD1gpaLn9t")))
+let feesAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "feesAddress").valueOrElse("3PFWAVKmXjfHXyzJb12jCbhP4Uhi9t4uWiD")))
+let shutdownAddressStr = getString(CONFIG_ADDRESS, "shutdownAddress").valueOrElse("3PEpv9hRFWEEBU22WRnLsw1bH4YGtcU728o")
+let layer2Addresses = getString(CONFIG_ADDRESS, "layer2Addresses").valueOrElse("3PR1Qvi9mHT35SwWEkLSqqE2L8thiPLdVWU,3PQoBfUKHkJAeGWhooLP7WS8ovb54av9Jp2")
+let coldMasterAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "coldMasterAddress").valueOrElse("3PK9nhPfPbMBygB9ZgHVMHaQbSoojwrBfxj")))
+let calculatorAccount = Address(fromBase58String(getString(CONFIG_ADDRESS, "factoryAddress").valueOrElse("3PPEBRg4s2af2rQ2ZbLvdu1Hfd4Vo6QVDTo")))
+let factoryAccount = Address(fromBase58String(getString(CONFIG_ADDRESS, "factoryAddress").valueOrElse("3PPEBRg4s2af2rQ2ZbLvdu1Hfd4Vo6QVDTo")))
+
+## TESTNET
+# let oracleAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "oracleAddress").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")))
+# let feesAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "feesAddress").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")))
+# let shutdownAddressStr = getString(CONFIG_ADDRESS, "shutdownAddress").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")
+# let layer2Addresses = getString(CONFIG_ADDRESS, "layer2Addresses").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")
+# let coldMasterAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "coldMasterAddress").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")))
+# let calculatorAccount = Address(fromBase58String(getString(CONFIG_ADDRESS, "factoryAddress").valueOrElse("3N1ytAUyhtig9X6F2hHHs1jbzYxr47Yp8Fr")))
+# let factoryAccount = Address(fromBase58String(getString(CONFIG_ADDRESS, "factoryAddress").valueOrElse("3MsgzbtRg8NEkbTcHBywtwTdCe9BRxMQo5T")))
+
+let masterPubKey = fromBase58String(getString(CONFIG_ADDRESS, "masterPubKey").valueOrElse("4z8CKSYQBKkzx7PBb5uBP1YPa6YAHRNTApW1sQVHT5eU")) # verifier
+
+
+## GLOBAL VARIABLES ##
+let T = tryGetInteger("static_tokensAmount")
+let assetIds = FOLD<10>(tryGetString("static_tokenIds").split(","), [], addAssetBytesToList)
+let AssetsWeights = FOLD<10>(assetIds, [], addAssetWeightToList)
+let Decimals = FOLD<10>(assetIds, [], addAssetDecimalsToList)
+let Scales = FOLD<10>(assetIds, [], addAssetScaleToList)
+let Fee = tryGetInteger("static_fee")
+let earnedAssets = assetIds
+
+
+## UTIL METHODS ##
+
+func getPoolStatus() = {
+  let poolId = getInteger(factoryAccount, "pool__" + this.toString()).valueOrElse(0)
+  let status = getInteger(factoryAccount, "pool__status__" + poolId.toString()).valueOrElse(2)
+
+  status
+}
+
+func getSetting(key: String) = {
+  factoryAccount.getIntegerValue("setup__"+key)
+}
+let InitalWavesLiquidity = getSetting("virtualLiquidity")
+let CreationFee = getSetting("creationFee")
+let CurveTarget = getSetting("curveTarget")
+
+func isShutdown() = {
+  let shutdownAddress = addressFromString(shutdownAddressStr)
+  if shutdownAddress == unit then {false} else {
+    match getBoolean(shutdownAddress.value(), "is_shutdown") {
+      case x: Boolean => x
+      case _ => false
+    }
+  }
+}
+
+func getPriceFromOracle(assetIdStr: String) = {
+  match getInteger(oracleAddress, assetIdStr+"_twap5B") {
+    case x: Int => x
+    case _ => 1000000
+  }
+}
+
+func calculateUsdValue(assetId: ByteVector|Unit, amount: Int, aBalance: Int) = {
+
+  let assetWeight = tryGetInteger("static_"+assetId.getAssetString()+"_weight")
+
+  let feeAssetStr = tryGetString("static_feeToken")
+  let feeAssetScale = getIntegerValue(this, "static_"+feeAssetStr+"_scale")
+  let feeAssetNum = assetIds.indexOf(feeAssetStr.getAssetBytes()).value()
+  let feeAssetWeight = AssetsWeights[feeAssetNum]
+  let feeAssetBalance = tryGetInteger("global_"+feeAssetStr+"_balance")
+  let valInFeeAsset = fraction( amount, feeAssetBalance / feeAssetWeight, aBalance / assetWeight )
+
+  let feeAssetPrice = getPriceFromOracle(feeAssetStr)
+
+  fraction( valInFeeAsset, feeAssetPrice, feeAssetScale )
+
+}
+
+func calculateOutAmount(AmountIn: Int, assetIn: ByteVector|Unit, assetOut: ByteVector|Unit, BalanceIn: Int, BalanceOut: Int) = {
+  let IndexIn = assetIds.indexOf(assetIn).value()
+  let IndexOut = assetIds.indexOf(assetOut).value()
+  if (IndexIn == IndexOut) then { AmountIn }
+  else {
+    fraction( BalanceOut, 
+              Scale8 * Scale8 - 
+
+              pow(fraction(BalanceIn.toBigInt()*10000.toBigInt(), (Scale8 * Scale8).toBigInt(), (BalanceIn + AmountIn).toBigInt()*10000.toBigInt(), HALFUP), 
+                    16, 
+                    fraction(AssetsWeights[IndexIn], 1_000000000000, AssetsWeights[IndexOut]).toBigInt(),
+                    12,
+                    16,
+                    CEILING).toInt()    
+              , Scale8 * Scale8, HALFEVEN)   
+  }
+}
+
+func calculateCurrentAssetInterest(assetId: ByteVector|Unit, assetIdStr: String, aBalance: Int, tokenEarningsLastCheck: Int) = {
+  let totalStaked = tryGetInteger("global_indexStaked")
+
+  let tokenBalanceLastCheck = tokenEarningsLastCheck
+  let currentBalanceDelta = getTokenBalance(assetId) - aBalance
+  let currentTokenEarnings = if (currentBalanceDelta > tokenBalanceLastCheck) then {currentBalanceDelta} else {tokenBalanceLastCheck}
+
+  let newEarnings = currentTokenEarnings - tokenBalanceLastCheck
+  let newInterest = if (totalStaked == 0) then {0} else {fraction(newEarnings, Scale8, totalStaked)}
+  let lastCheckInterest = tryGetInteger("global_lastCheck_" + assetIdStr + "_interest")
+  lastCheckInterest + newInterest
+}
+
+func claimResult(address: Address) = {
+  let addressStr = address.toString()
+  let puzzleAmount = tryGetInteger(addressStr + "_indexStaked")
+
+  func handler(accum: (List[IntegerEntry|ScriptTransfer], Int), assetId: ByteVector|Unit) = {
+    let assetIdStr = assetId.getAssetString()
+    let aBalance = tryGetInteger("global_"+assetId.getAssetString()+"_balance")
+    let tokenEarningsLastCheck = tryGetInteger("global_lastCheck_" + assetIdStr + "_earnings")
+
+    let currentTokenInterest = calculateCurrentAssetInterest(assetId, assetIdStr, aBalance, tokenEarningsLastCheck)
+    let currentTokenEarnings = max([tokenEarningsLastCheck, getTokenBalance(assetId) - aBalance])
+
+    let rewardAmount = fraction(puzzleAmount, (currentTokenInterest - tryGetInteger(addressStr + "_lastCheck_" + assetIdStr + "_interest")), Scale8)
+    
+    let transfer = if (rewardAmount == 0) then {[]} else {[ScriptTransfer(address, rewardAmount, assetId)]}
+    (accum._1 ++ transfer ++ [
+      IntegerEntry("global_lastCheck_" + assetIdStr + "_earnings", currentTokenEarnings - rewardAmount),
+      IntegerEntry("global_lastCheck_" + assetIdStr + "_interest", currentTokenInterest),
+      IntegerEntry(addressStr + "_lastCheck_" + assetIdStr + "_interest", currentTokenInterest)
+    ], accum._2 + calculateUsdValue(assetId, rewardAmount, aBalance))
+  }
+  
+  let accum = FOLD<10>(earnedAssets, ([], 0), handler)
+  (accum._1 ++ [
+    IntegerEntry(addressStr+"_claimedRewardUSD", tryGetInteger(addressStr+"_claimedRewardUSD") + accum._2),
+    IntegerEntry(addressStr+"_lastClaim", lastBlock.timestamp)
+  ], accum._2)
+}
+
+func sum(accum: Int, n: String) = {accum + n.parseIntValue()}
+func checkFeeAsset(accum: String, next: String) = { if (supportedFeeAssetsStr.indexOf(next) != unit && accum == "") then {next} else {accum} }
+
+func swapInternal(assetIn: String, assetOut: String, amountIn: Int, minimum: Int, receipientAddressStr: String) = {
+  # markup all assets
+  let AmountIn = amountIn
+  let AssetIn = assetIn.getAssetBytes()
+  let AssetOut = assetOut.getAssetBytes()
+  let scaleIn = Scale8 / tryGetInteger("static_" + assetIn + "_scale")
+  let scaleOut = Scale8 / tryGetInteger("static_" + assetOut + "_scale")
+  let feeAssetOutStr = tryGetString("static_feeToken")
+  let feeAssetOut = if (feeAssetOutStr == "") then {wavesAssetId} else {feeAssetOutStr.getAssetBytes()}
+  
+  # markup all asset numbers
+  let AssetInBalance = tryGetInteger("global_"+AssetIn.getAssetString()+"_balance")
+  let AssetOutBalance = tryGetInteger("global_"+assetOut+"_balance")
+  let AssetInBalanceScaled = AssetInBalance * scaleIn
+  let AssetOutBalanceScaled = AssetOutBalance * scaleOut
+  let feeAmountIn = fraction(AmountIn, Fee, FeeScale)
+  let cleanAmountIn = (AmountIn - feeAmountIn)
+  let cleanAmountInScaled = cleanAmountIn * scaleIn
+
+  # calculate "out" numbers
+  let AmountOut1 = calculateOutAmount(cleanAmountInScaled, AssetIn, AssetOut, AssetInBalanceScaled, AssetOutBalanceScaled)
+  let AmountOut = fraction(AmountOut1, 1, scaleOut)
+  let AssetOutBalance2 = AssetOutBalance - AmountOut
+  let AssetInBalance2 = AssetInBalance + cleanAmountIn
+
+  let feeAssetOutBalance = 
+                            if (feeAssetOut == AssetIn) then {AssetInBalance2} 
+                            else if (feeAssetOut == AssetOut) then {AssetOutBalance2} 
+                            else {tryGetInteger("global_"+feeAssetOut.getAssetString()+"_balance")}
+    
+  let feeAmountOut = calculateOutAmount(feeAmountIn, AssetIn, feeAssetOut, AssetInBalance, feeAssetOutBalance)
+
+  # do all the verifications
+  # TODO: verification that realPrice <= marketPrice (just in case)
+  if (AmountOut < minimum) then {
+    throw("amount to recieve is lower than given one")
+  } 
+  else if (AssetOut == AssetIn) then {
+    throw("this swap is not allowed")
+  }
+  else if (AssetOutBalance - AmountOut < 0) then {
+    throw("contract is out of reserves")
+  }
+  else if (isShutdown()) then {
+    throw("contract is on stop")
+  }
+  else {
+    # top up protocol fee
+    let creatorFee = fraction(feeAmountOut, 1, 10)
+    let protocolFee = fraction(feeAmountOut, 4, 10)
+  
+    # calculate state changes
+    let newBalanceIn = AssetInBalance2
+    let newBalanceOut = AssetOutBalance2 - (if (AssetOut == feeAssetOut) then {feeAmountOut} else {0})
+    let newBalanceFeeAsset = if (feeAssetOut != AssetIn && feeAssetOut != AssetOut) then {feeAssetOutBalance - feeAmountOut} else {unit}
+
+    # prepare state changes
+    let assetInChange = IntegerEntry("global_"+AssetIn.getAssetString()+"_balance", newBalanceIn)
+    let assetOutChange = IntegerEntry("global_"+assetOut+"_balance", newBalanceOut)
+    let feeAssetOutChange = if (newBalanceFeeAsset != unit) 
+                            then {IntegerEntry("global_"+feeAssetOut.getAssetString()+"_balance", newBalanceFeeAsset.value())} 
+                            else {StringEntry("hello", "world")}
+
+    let volumeUsdUpdate = calculateUsdValue(AssetIn, AmountIn, AssetInBalance)
+
+    (
+      [
+        # change state with new balance values
+        assetOutChange,
+        assetInChange,
+        feeAssetOutChange,
+
+        # send amountOut to the user
+        ScriptTransfer(receipientAddressStr.addressFromStringValue(), AmountOut, AssetOut),
+
+        # send fee to the pool creator
+        ScriptTransfer(tryGetString("static_poolOwner").addressFromStringValue(), creatorFee, feeAssetOut),
+        IntegerEntry("global_earnedByOwner", tryGetInteger("global_earnedByOwner") + creatorFee),
+
+        # update volume stats
+        IntegerEntry("global_volume_usd", tryGetInteger("global_volume_usd") + volumeUsdUpdate),
+
+        # send platform fee
+        ScriptTransfer(feesAddress, protocolFee, feeAssetOut)
+      ], 
+      AmountOut
+    )
+  }
+}
+
+## CALLABLE METHODS ##
+
+@Callable(i)
+func initPool(poolDomain: String, poolOwner: String, tokenName: String, tokenDesc: String, tokenQuantity: Int) = {
+
+  func calculatePoolTokensAmount(payments: List[AttachedPayment]) = {
+    func handler(accum: Int, pmt: AttachedPayment) = {
+      let assetId = pmt.assetId
+      func handler2(accum: Int, n: ByteVector|Unit) = {
+        if (n == assetId) then {assetIds.indexOf(n).value()} else {accum}
+      }
+      let Token = FOLD<10>(assetIds, 1, handler2)
+      fraction(accum, pow(pmt.amount, Decimals[Token], AssetsWeights[Token], AssetsWeightsDecimals, 8, FLOOR), Scale8)
+    }
+    FOLD<10>(payments, PoolTokenScale, handler)
+  }
+
+  # issuing meme
+  let meme = Issue(tokenName, tokenDesc, tokenQuantity, 8, false)
+  let memeId = meme.calculateAssetId()
+  let memeIdStr = memeId.getAssetString()
+
+  # setting pool parameters
+  let assetWeightsStr = "5000,5000"
+  let baseTokenIdStr = "WAVES"
+  let poolOwnerAddress = Address(poolOwner.fromBase58String())
+  let assetIdsStr = "WAVES," + memeIdStr
+  let assetIdsStrLi = assetIdsStr.split(",")    
+  let assetIdsLi = FOLD<10>(assetIdsStrLi, [], addAssetBytesToList)
+  let fee = 100
+  let feeAssetStr = FOLD<10>(assetIdsStrLi, "", checkFeeAsset)
+
+  # attached waves
+  let pmt = i.payments[0]
+  let amount = pmt.amount
+  let pmtAsset = if (pmt.assetId == unit) then {"WAVES"} else {throw("you have to attach some WAVES")}
+
+  if (this != this) then {throw("self-invoke only")}
+  else if (feeAssetStr == "") then {throw("pool must have one of the supported fee assets in the composition")}
+  else if (poolDomain.size() > 13) then {throw("too large pool domain")}
+  else if (fee > 500 || fee < 0) then {throw("fee value must be between 50 and 500 (0.5-5%)")}
+  else if (isShutdown()) then {
+    throw("contract is on stop")
+  } else {
+
+    let assetWeightsStrLi = assetWeightsStr.split(",")
+    let assetWeightsSum = FOLD<10>(assetWeightsStrLi, 0, sum)
+
+    func addTokenDataEntries(accum: List[IntegerEntry], assetNum: Int) = {
+      if (assetNum >= assetIdsLi.size()) then {
+        accum
+      } else {
+        # TODO: workaround for 6 decimals if base token is stable
+        let assetDecimals = 8
+        accum ++ [
+          IntegerEntry("static_"+assetIdsStrLi[assetNum]+"_scale", pow(10, 0, assetDecimals, 0, 0, DOWN)),
+          IntegerEntry("static_"+assetIdsStrLi[assetNum]+"_decimals", assetDecimals),
+          IntegerEntry("static_"+assetIdsStrLi[assetNum]+"_weight", assetWeightsStrLi[assetNum].parseInt().value())
+        ]
+      }
+    }
+
+    let initialPoolTokens = calculatePoolTokensAmount(i.payments)
+
+    if (assetWeightsSum != 10000) then {throw("sum of token weights must be equal to 10000")} 
+    else if (initialPoolTokens == 0) then {throw("you need a bigger tokens amount to launch the pool")} 
+    else {
+      let poolTokenIssue = Issue("PZ " + poolDomain, "Puzzle Swap: pool index token", initialPoolTokens, PoolTokenDecimals, true, unit, 0)
+      let poolTokenId = poolTokenIssue.calculateAssetId()
+
+      # preinit() child 
+      (FOLD<10>([0,1,2,3,4,5,6,7,8,9], [], addTokenDataEntries) ++ [
+        meme,
+        StringEntry("static_tokenIds", assetIdsStr),
+        StringEntry("static_feeToken", feeAssetStr),
+        StringEntry("static_tokenWeights", assetWeightsStr),
+        IntegerEntry("static_tokensAmount", assetIdsLi.size()),
+        StringEntry("static_poolDomain", poolDomain),
+        StringEntry("static_baseTokenId", baseTokenIdStr),
+        StringEntry("static_poolOwner", poolOwner),
+        IntegerEntry("static_fee", fee),
+        IntegerEntry("static_KMult", Scale16),
+        IntegerEntry("global_wasPreInited", 1)
+      ] ++
+
+      # init() child
+      [
+        IntegerEntry("global_WAVES_balance", InitalWavesLiquidity),
+        IntegerEntry("global_" + memeIdStr + "_balance", tokenQuantity)
+      ] ++
+      [
+        poolTokenIssue,
+        IntegerEntry("global_poolToken_amount", initialPoolTokens),
+        IntegerEntry("global_wasInited", 1),
+        BinaryEntry("global_poolToken_id", poolTokenId),
+        StringEntry("static_poolToken_idStr", poolTokenId.getAssetString()),
+        IntegerEntry(i.caller.toString() + "_indexStaked", initialPoolTokens),
+        IntegerEntry("global_indexStaked", initialPoolTokens)
+      ], memeIdStr)
+    }
+  }
+}
+
+@Callable(i)
+func init(poolDomain: String, poolOwner: String, tokenName: String, tokenDesc: String, tokenQuantity: Int) = {
+
+  if (i.caller != factoryAccount) then {throw("admin only")}
+  else {
+
+    strict inv1 = invoke(this, "initPool", [poolDomain, poolOwner, tokenName, tokenDesc, tokenQuantity], [])
+    let memeIdStr = inv1.exactAs[String]
+    
+    swapInternal("WAVES", memeIdStr, i.payments[0].amount-CreationFee, 0, i.originCaller.toString())._1
+  
+  }
+}
+
+@Callable(i)
+func claimIndexRewards() = {
+  if (isShutdown()) then {
+    throw("contract is on stop")
+  } else {
+    claimResult(i.caller)
+  }
+}
+
+@Callable(i)
+func evaluateClaim(user: String) = {
+  ([], claimResult(user.addressFromStringValue())._2)
+}
+
+@Callable(i)
+func swap(assetOut: String, minimum: Int) = {
+  let status = getPoolStatus()
+
+  if (status < 2) then {
+    let pmt = if (i.payments.size() == 1) then {i.payments[0].value()} else {throw("please attach exactly one payment")}
+    let AmountIn = i.payments[0].amount.value()
+    let AssetIn = i.payments[0].assetId
+    let res = swapInternal(AssetIn.getAssetString(), assetOut, AmountIn, minimum, i.caller.toString())
+
+    if (getIntegerValue("global_WAVES_balance") > CurveTarget) then {
+      strict notifyInv = invoke(factoryAccount, "notifyStatusUpdate", [2], [])
+      res
+    } else res
+  } else {
+    throw("pool is stopped: most probably it reached the target liquidity")
+  }
+}
+
+@Callable(i)
+func swapReadOnly(assetIn: String, assetOut: String, AmountIn: Int) = {
+  # throw("stop")
+  # markup all assets
+  let AssetIn = getAssetBytes(assetIn)
+  let AssetOut = assetOut.getAssetBytes()
+  let scaleIn = Scale8 / tryGetInteger("static_" + assetIn + "_scale")
+  let scaleOut = Scale8 / tryGetInteger("static_" + assetOut + "_scale")
+  let feeAssetOutStr = tryGetString("static_feeToken")
+  let feeAssetOut = if (feeAssetOutStr == "") then {usdnAssetId} else {feeAssetOutStr.getAssetBytes()}
+  
+  # markup all asset numbers
+  let AssetInBalance = tryGetInteger("global_"+AssetIn.getAssetString()+"_balance")
+  let AssetOutBalance = tryGetInteger("global_"+assetOut+"_balance")
+  let AssetInBalanceScaled = AssetInBalance * scaleIn
+  let AssetOutBalanceScaled = AssetOutBalance * scaleOut
+  let feeAmountIn = fraction(AmountIn, Fee, FeeScale)
+  let cleanAmountIn = (AmountIn - feeAmountIn)
+  let cleanAmountInScaled = cleanAmountIn * scaleIn
+
+  # calculate "out" numbers
+  let AmountOut1 = calculateOutAmount(cleanAmountInScaled, AssetIn, AssetOut, AssetInBalanceScaled, AssetOutBalanceScaled)
+  let AmountOut = fraction(AmountOut1, 1, scaleOut)
+  let AssetOutBalance2 = AssetOutBalance - AmountOut
+  let AssetInBalance2 = AssetInBalance + cleanAmountIn
+
+  let feeAssetOutBalance = 
+                            if (feeAssetOut == AssetIn) then {AssetInBalance2} 
+                            else if (feeAssetOut == AssetOut) then {AssetOutBalance2} 
+                            else {tryGetInteger("global_"+feeAssetOut.getAssetString()+"_balance")}
+    
+  let feeAmountOut = calculateOutAmount(feeAmountIn, AssetIn, feeAssetOut, AssetInBalance, feeAssetOutBalance)
+
+  # do all the verifications
+  # TODO: verification that realPrice <= marketPrice (just in case)
+  if (AssetOut == AssetIn) then {
+    throw("this swap is not allowed")
+  }
+  else if (AssetOutBalance - AmountOut < 0) then {
+    throw("contract is out of reserves")
+  }
+  else if (isShutdown()) then {
+    throw("contract is on stop")
+  }
+  else {
+    (
+      [], AmountOut
+    )
+  }
+}
+
+@Callable(i)
+func transferOwnership(newOwnerAddress: String) = {
+  if (i.caller.toString() != tryGetString("static_poolOwner")) then {throw("this call available only for pool owner")}
+  else {
+    [StringEntry("static_poolOwner", newOwnerAddress)]
+  }
+}
+
+@Verifier(tx)
+func verify() = {
+  let keyAdminAddressList = "%s__adminAddressList"
+  let kPoolContractHash = "pool__contract__hash"
+  let keyAllowedTxId = "%s__txId"
+  let adminList = factoryAccount.getString(keyAdminAddressList).valueOrElse("").split("__")
+  
+  let byOwner = (if (adminList.size() >= 3) then {
+      false
+    } else {
+      sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
+  })
+
+  let byAdmins = (tx.id == factoryAccount.getString(keyAllowedTxId).valueOrElse("").fromBase58String())
+
+  match (tx) {
+      case setScripTx:SetScriptTransaction => {
+        let hashOnFactory = factoryAccount.getBinary(kPoolContractHash).valueOrElse(base58'')
+        let hash = blake2b256(setScripTx.script.value())
+        
+        (hash == hashOnFactory) || byAdmins || byOwner
+      }
+      case _ => byAdmins || byOwner
+    }
+}
