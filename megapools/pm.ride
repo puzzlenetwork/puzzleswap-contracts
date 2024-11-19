@@ -2,12 +2,8 @@
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 
+let VERSION = "PM-0.8.1-DEV"
 
-
-
-let VERSION = "PM-0.8.1"
-
-# may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")
 let CONFIG_ADDRESS = if (configStr == "") then {
   this
