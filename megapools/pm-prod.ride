@@ -1,7 +1,6 @@
 {-# STDLIB_VERSION 6 #-}
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
-{-# IMPORT artifacts/mainnet.ride #-}
 
 let VERSION = "PM-0.8.1-PROD"
 
