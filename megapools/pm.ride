@@ -1,12 +1,11 @@
 {-# STDLIB_VERSION 6 #-}
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
-{-# IMPORT artifacts/testnet.ride #-}
 
 
 
 
-let VERSION = "PM-0.8.0"
+let VERSION = "PM-0.8.1"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")
@@ -547,21 +546,28 @@ func transferOwnership(newOwnerAddress: String) = {
   }
 }
 
-# @Verifier(tx)
-# func verify() = {
-#   if (
-#     getInteger("global_wasPreInited").valueOrElse(0) == 0 && (
-#     sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey) || sigVerify(tx.bodyBytes, tx.proofs[0], masterPubKey)
-#   )) then {
-#     true
-#   } else {
-#     match tx {
-#       case tx: SetScriptTransaction => {
-#         let scriptFull = tx.script.value()
-#         let hash = scriptFull.sha256().toBase58String()
-#         sigVerify(tx.bodyBytes, tx.proofs[0], masterPubKey) && getInteger(coldMasterAddress, "approvedScript_" + hash).valueOrElse(0) > height
-#       }
-#       case _ => sigVerify(tx.bodyBytes, tx.proofs[0], masterPubKey) && getInteger(coldMasterAddress, "approvedTx_" + tx.id.toBase58String()).valueOrElse(0) > 0
-#     }
-#   }
-# }
+@Verifier(tx)
+func verify() = {
+  let keyAdminAddressList = "%s__adminAddressList"
+  let kPoolContractHash = "pool__contract__hash"
+  let keyAllowedTxId = "%s__txId"
+  let adminList = factoryAccount.getString(keyAdminAddressList).valueOrElse("").split("__")
+  
+  let byOwner = (if (adminList.size() >= 3) then {
+      false
+    } else {
+      sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
+  })
+
+  let byAdmins = (tx.id == factoryAccount.getString(keyAllowedTxId).valueOrElse("").fromBase58String())
+
+  match (tx) {
+      case setScripTx:SetScriptTransaction => {
+        let hashOnFactory = factoryAccount.getBinary(kPoolContractHash).valueOrElse(base58'')
+        let hash = blake2b256(setScripTx.script.value())
+        
+        (hash == hashOnFactory) || byAdmins || byOwner
+      }
+      case _ => byAdmins || byOwner
+    }
+}
