@@ -2,11 +2,10 @@
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 
-
-let VERSION = "PZ-2.0.3 PROD"
+let VERSION = "PZ-2.0.4 PROD"
 
 # may be better 
-let configStr = getString(this, "configAddress").valueOrElse("3PMyZZZZe7v4L6VGQ9asSeaxLR9kdcj1FEj")
+let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
 let CONFIG_ADDRESS = if (configStr == "") then {
   this
 } else {
@@ -113,7 +112,7 @@ let masterAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "masterAd
 let masterPubKey = fromBase58String(getString(CONFIG_ADDRESS, "masterPubKey").valueOrElse("4z8CKSYQBKkzx7PBb5uBP1YPa6YAHRNTApW1sQVHT5eU")) # verifier
 let oracleAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "oracleAddress").valueOrElse("3P8d1E1BLKoD52y3bQJ1bDTd2TD1gpaLn9t")))
 let stakingAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "stakingAddress").valueOrElse("3PFTbywqxtFfukX3HyT881g4iW5K4QL3FAS")))
-let feesAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "feesAddress").valueOrElse("3PMyZZZZe7v4L6VGQ9asSeaxLR9kdcj1FEj")))
+let feesAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "feesAddress").valueOrElse("3PFWAVKmXjfHXyzJb12jCbhP4Uhi9t4uWiD")))
 let poolsHubAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "poolsHubAddress").valueOrElse("3P5YutjDNC3hABBVsveFuZTTbQ5PdtSDBgk")))
 let shutdownAddressStr = getString(CONFIG_ADDRESS, "shutdownAddress").valueOrElse("3PEpv9hRFWEEBU22WRnLsw1bH4YGtcU728o")
 let layer2Addresses = getString(CONFIG_ADDRESS, "layer2Addresses").valueOrElse("3PR1Qvi9mHT35SwWEkLSqqE2L8thiPLdVWU,3PQoBfUKHkJAeGWhooLP7WS8ovb54av9Jp2")
@@ -633,6 +632,16 @@ func evaluateClaim(user: String) = {
 }
 
 @Callable(i)
+func withdrawLiquidity(assetIdStr: String, amount: Int) = {
+  if (i.caller.toString() != tryGetString("static_poolOwner")) then {throw("this call available only for pool owner")}
+  else {
+    [
+      ScriptTransfer(tryGetString("static_poolOwner").addressFromStringValue(), amount, assetIdStr.getAssetBytes())
+    ]
+  }
+}
+
+@Callable(i)
 func swap(assetOut: String, minimum: Int) = {
   # throw("stop")
   # markup all assets
@@ -675,7 +684,7 @@ func swap(assetOut: String, minimum: Int) = {
   }
   else {
     # top up protocol fee
-    let protocolFee = fraction(feeAmountIn, 10, 10)
+    let protocolFee = fraction(feeAmountIn, 5, 10)
   
     # calculate state changes
     let newBalanceIn = AssetInBalance2
