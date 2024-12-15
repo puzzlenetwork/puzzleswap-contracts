@@ -1,10 +1,8 @@
 {-# STDLIB_VERSION 6 #-}
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
-{-# IMPORT artifacts/mainnet.ride #-}
 
-
-let VERSION = "PM-0.8.2-PROD"
+let VERSION = "PM-0.9.0-PROD"
 
 let configStr = getString(this, "configAddress").valueOrElse("3PPEBRg4s2af2rQ2ZbLvdu1Hfd4Vo6QVDTo")
 let CONFIG_ADDRESS = if (configStr == "") then {
@@ -466,6 +464,18 @@ func claimIndexRewards() = {
 @Callable(i)
 func evaluateClaim(user: String) = {
   ([], claimResult(user.addressFromStringValue())._2)
+}
+
+@Callable(i)
+func withdrawLiquidityAtTarget() = {
+  let status = getPoolStatus()
+
+  if (status == 2) then {
+    [
+      ScriptTransfer(factoryAccount, getTokenBalance(assetIds[0]), assetIds[0]),
+      ScriptTransfer(factoryAccount, getTokenBalance(assetIds[1]), assetIds[1])
+    ]
+  } else { throw("target is not reached yet") }
 }
 
 @Callable(i)
