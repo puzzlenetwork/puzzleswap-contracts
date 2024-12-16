@@ -2,7 +2,8 @@
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 
-let VERSION = "PM-0.9.0-DEV"
+
+let VERSION = "PM-0.9.1-DEV"
 
 let configStr = getString(this, "configAddress").valueOrElse("3N91e7wHiV7QadDsx3RUJQxx1etqcAKrfHj")
 let CONFIG_ADDRESS = if (configStr == "") then {
@@ -470,7 +471,8 @@ func evaluateClaim(user: String) = {
 func withdrawLiquidityAtTarget() = {
   let status = getPoolStatus()
 
-  if (status == 2) then {
+  if (i.caller != factoryAccount) then {throw("available only for factory invoke")}
+  else if (status == 2) then {
     [
       ScriptTransfer(factoryAccount, getTokenBalance(assetIds[0]), assetIds[0]),
       ScriptTransfer(factoryAccount, getTokenBalance(assetIds[1]), assetIds[1])
