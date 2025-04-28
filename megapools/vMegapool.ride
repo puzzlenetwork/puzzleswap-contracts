@@ -2,7 +2,11 @@
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 
-let VERSION = "PZ-2.0.4 PROD"
+# TODO
+#
+# index staking interest
+
+let VERSION = "PZ-2.0.5 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -75,6 +79,14 @@ func getTokenBalance(assetId: ByteVector|Unit) = {
       case t:ByteVector => assetBalance(this, t)
       case _ => wavesBalance(this).available
     }
+}
+
+func getFactBalance(assetIdStr: String) = {
+    getTokenBalance(assetIdStr.getAssetBytes())
+}
+
+func getFactBalancePrior(assetIdStr: String, lastOp: Int) = {
+    getTokenBalance(assetIdStr.getAssetBytes()) - lastOp
 }
 
 func addAssetBytesToList(accum: List[ByteVector|Unit], item: String) = { accum ++ [item.getAssetBytes()] }
@@ -167,7 +179,7 @@ func getVirtualPoolTokenAmount() = {fraction(tryGetInteger("global_poolToken_amo
 func calculatePIssued(amount: Int, tokenId: ByteVector|Unit) = {
   # P issued = pool tokens to issue
   let Psupply = getVirtualPoolTokenAmount()
-  let Balance = tryGetInteger("global_"+tokenId.getAssetString()+"_balance")
+  let Balance = getFactBalance(tokenId.getAssetString())
   let t1 = fraction(amount, Psupply, Balance, DOWN)
   # debug("t1: " + t1.toString() + ", t2: " + t2.toString())
   t1
@@ -228,18 +240,18 @@ func handlePoolTokensAdd(PIssued: Int, payments: List[AttachedPayment], userAddr
   }
 
   func handleTokenChange(accum: List[IntegerEntry|ScriptTransfer], tokenId: ByteVector|Unit) = {
-    let Bk = tryGetInteger("global_"+tokenId.getAssetString()+"_balance")
+    let paymentAmount = getTokenPaymentAmount(tokenId)
+    let Bk = getFactBalancePrior(tokenId.getAssetString(), paymentAmount)
     let PSupply = getVirtualPoolTokenAmount()
     let tokenDecimals = tryGetInteger("static_"+tokenId.getAssetString()+"_scale")
     let a1 = fraction((PSupply + PIssued).toBigInt()*Scale8.toBigInt(), tokenDecimals.toBigInt(), PSupply.toBigInt(), CEILING)
     let Dk = fraction(a1 - tokenDecimals.toBigInt()*Scale8.toBigInt(), Bk.toBigInt(), tokenDecimals.toBigInt()*Scale8.toBigInt(), CEILING).toInt()  # deposited amount of token K
 
-    let paymentAmount = getTokenPaymentAmount(tokenId)
     let toReturn = paymentAmount - Dk
 
     let t = if (needChange && toReturn > 0) then {[ScriptTransfer(userAddress, toReturn, tokenId)]} else {[]}
     accum ++ t ++ [
-      IntegerEntry("global_"+tokenId.getAssetString()+"_balance", Bk+Dk)
+        IntegerEntry("global_"+tokenId.getAssetString()+"_balance", fraction(tryGetInteger("global_"+tokenId.getAssetString()+"_balance"), PSupply+PIssued, PSupply))
     ]
   }
 
@@ -248,7 +260,7 @@ func handlePoolTokensAdd(PIssued: Int, payments: List[AttachedPayment], userAddr
 
 func handlePoolTokensRedeem(PRedeemed: Int, userAddress: Address) = {
   func handleTokenRedeem(accum: List[IntegerEntry|ScriptTransfer], tokenId: ByteVector|Unit) = {
-    let Bk = tryGetInteger("global_"+tokenId.getAssetString()+"_balance")
+    let Bk = getFactBalance(tokenId.getAssetString())
     let PSupply = getVirtualPoolTokenAmount()
     let tokenDecimals = tryGetInteger("static_"+tokenId.getAssetString()+"_scale")
 
@@ -257,7 +269,7 @@ func handlePoolTokensRedeem(PRedeemed: Int, userAddress: Address) = {
       (Scale16.toBigInt() - psuppl), Bk.toBigInt(), Scale16.toBigInt(), CEILING).toInt()
 
     accum ++ [
-      IntegerEntry("global_"+tokenId.getAssetString()+"_balance", Bk-amount),
+      IntegerEntry("global_"+tokenId.getAssetString()+"_balance", fraction(tryGetInteger("global_"+tokenId.getAssetString()+"_balance"), PSupply-PRedeemed, PSupply)),
       ScriptTransfer(userAddress, amount, tokenId)
     ]
   }
@@ -413,6 +425,22 @@ func validateWeights(weights: List[String]) = {
   FOLD<10>(weights, 0, v)
 }
 
+# VIRTUAL GETTERS
+
+func getP1P2(assetIdStr: String, baseAssetIdStr: String) = {
+    let B1 = tryGetInteger("global_"+baseAssetIdStr+"_balance")
+    let B2 = tryGetInteger("global_"+assetIdStr+"_balance")
+    let F1 = getFactBalance(baseAssetIdStr)
+    let F2 = getFactBalance(assetIdStr)
+    let S1 = tryGetInteger("static_"+baseAssetIdStr+"_scale")
+    let S2 = tryGetInteger("static_"+assetIdStr+"_scale")
+
+    let p1 = fraction((B1 - F1), (B1 - F1), fraction(B1, B2, S2) )
+    let p2 = fraction( B1, B2, fraction((B2 - F2), (B2 - F2), S2) )
+
+    (p1, p2)
+}
+
 ## CALLABLE METHODS ##
 
 @Callable(i)
@@ -516,7 +544,7 @@ func init(vBalancesStr: String) = {
 
       prepareList() ++
       [
-        poolTokenIssue,
+        # poolTokenIssue,
         IntegerEntry("global_poolToken_amount", initialPoolTokens),
         IntegerEntry("global_wasInited", 1),
         BinaryEntry("global_poolToken_id", poolTokenId),
@@ -530,46 +558,40 @@ func init(vBalancesStr: String) = {
 
 @Callable(i)
 func generateIndex(needChange: Boolean) = {
-  throw("LP is closed yet")
-#   if (i.payments.size() != T) then {
-#     throw("you need to attach all pool tokens. amount of pool tokens: " + T.toString())
-#   } else {
-#     if (!(checkTokensValidity(i.payments))) then {throw("wrong assets attached")} 
-#     else {
-#       let PIssuedNoMult = getMinPIssued(i.payments)
-#       let result = handlePoolTokensAdd(PIssuedNoMult, i.payments, i.originCaller, needChange)
+  if (i.payments.size() != T) then {
+    throw("you need to attach all pool tokens. amount of pool tokens: " + T.toString())
+  } else {
+    if (!(checkTokensValidity(i.payments))) then {throw("wrong assets attached")} 
+    else {
+      let PIssuedNoMult = getMinPIssued(i.payments)
+      let result = handlePoolTokensAdd(PIssuedNoMult, i.payments, i.originCaller, needChange)
 
-#       let PIssuedWithMult = fraction(PIssuedNoMult, Scale16, getKMult(), DOWN)
-#       let reissue = Reissue(getBinaryValue("global_poolToken_id"), PIssuedWithMult, true)
+      let PIssuedWithMult = fraction(PIssuedNoMult, Scale16, getKMult(), DOWN)
       
-#       (result ++ [
-#         reissue,
-#         ScriptTransfer(i.caller, PIssuedWithMult, tryGetBinary("global_poolToken_id")),
-#         IntegerEntry("global_poolToken_amount", tryGetInteger("global_poolToken_amount") + PIssuedWithMult)
-#       ], PIssuedWithMult)
-#     }
-#   }
+      (result ++ [
+        IntegerEntry(i.caller.toString()+"_indexStaked", tryGetInteger(i.caller.toString()+"_indexStaked") + PIssuedWithMult),
+        IntegerEntry("global_poolToken_amount", tryGetInteger("global_poolToken_amount") + PIssuedWithMult)
+      ], PIssuedWithMult)
+    }
+  }
 }
 
 @Callable(i)
-func redeemIndex(sendToOrigin: Boolean) = {
-  throw("LP is closed yet")
-#   let pmt = i.payments[0]
-#   if (pmt.assetId != tryGetBinary("global_poolToken_id")) then {
-#     throw("please attach pool share token")
-#   } 
-#   else if (isShutdown()) then {
-#     throw("contract is on stop")
-#   } else {
-#     let PRedeemedWithMult = pmt.amount
-#     let PRedeemedWithNoMult = fraction(PRedeemedWithMult, getKMult(), Scale16, DOWN)
-#     let result = handlePoolTokensRedeem(PRedeemedWithNoMult, if (sendToOrigin) then {i.originCaller} else {i.caller})
+func redeemIndex(sendToOrigin: Boolean, poolTokenAmount: Int) = {
+  if (poolTokenAmount > tryGetInteger(i.caller.toString() + "_indexStaked")) then {
+    throw("user doesn't have this amount of pool tokens")
+  } else if (isShutdown()) then {
+    throw("contract is on stop")
+  } else {
+    let PRedeemedWithMult = poolTokenAmount
+    let PRedeemedWithNoMult = fraction(PRedeemedWithMult, getKMult(), Scale16, DOWN)
+    let result = handlePoolTokensRedeem(PRedeemedWithNoMult, if (sendToOrigin) then {i.originCaller} else {i.caller})
 
-#     result ++ [
-#       Burn(tryGetBinary("global_poolToken_id"), PRedeemedWithMult),
-#       IntegerEntry("global_poolToken_amount", tryGetInteger("global_poolToken_amount") - PRedeemedWithMult)
-#     ]
-#   }
+    result ++ [
+      IntegerEntry(i.caller.toString() + "_indexStaked", tryGetInteger(i.caller.toString() + "_indexStaked") - PRedeemedWithMult),
+      IntegerEntry("global_poolToken_amount", tryGetInteger("global_poolToken_amount") - PRedeemedWithMult)
+    ]
+  }
 }
 
 @Callable(i)
@@ -684,7 +706,7 @@ func swap(assetOut: String, minimum: Int) = {
   }
   else {
     # top up protocol fee
-    let protocolFee = fraction(feeAmountIn, 5, 10)
+    let protocolFee = fraction(feeAmountIn, 10, 10)
   
     # calculate state changes
     let newBalanceIn = AssetInBalance2
