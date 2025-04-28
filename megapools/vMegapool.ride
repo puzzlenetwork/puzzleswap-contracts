@@ -3,10 +3,9 @@
 {-# SCRIPT_TYPE ACCOUNT #-}
 
 # TODO
-#
 # index staking interest
 
-let VERSION = "PZ-2.0.5 PROD"
+let VERSION = "PZ-2.0.6 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -82,11 +81,7 @@ func getTokenBalance(assetId: ByteVector|Unit) = {
 }
 
 func getFactBalance(assetIdStr: String) = {
-    getTokenBalance(assetIdStr.getAssetBytes())
-}
-
-func getFactBalancePrior(assetIdStr: String, lastOp: Int) = {
-    getTokenBalance(assetIdStr.getAssetBytes()) - lastOp
+    tryGetInteger("global_"+assetIdStr+"_factBalance")
 }
 
 func addAssetBytesToList(accum: List[ByteVector|Unit], item: String) = { accum ++ [item.getAssetBytes()] }
@@ -241,7 +236,7 @@ func handlePoolTokensAdd(PIssued: Int, payments: List[AttachedPayment], userAddr
 
   func handleTokenChange(accum: List[IntegerEntry|ScriptTransfer], tokenId: ByteVector|Unit) = {
     let paymentAmount = getTokenPaymentAmount(tokenId)
-    let Bk = getFactBalancePrior(tokenId.getAssetString(), paymentAmount)
+    let Bk = getFactBalance(tokenId.getAssetString())
     let PSupply = getVirtualPoolTokenAmount()
     let tokenDecimals = tryGetInteger("static_"+tokenId.getAssetString()+"_scale")
     let a1 = fraction((PSupply + PIssued).toBigInt()*Scale8.toBigInt(), tokenDecimals.toBigInt(), PSupply.toBigInt(), CEILING)
@@ -251,6 +246,7 @@ func handlePoolTokensAdd(PIssued: Int, payments: List[AttachedPayment], userAddr
 
     let t = if (needChange && toReturn > 0) then {[ScriptTransfer(userAddress, toReturn, tokenId)]} else {[]}
     accum ++ t ++ [
+        IntegerEntry("global_"+tokenId.getAssetString()+"_factBalance", tryGetInteger("global_"+tokenId.getAssetString()+"_factBalance") + Dk), 
         IntegerEntry("global_"+tokenId.getAssetString()+"_balance", fraction(tryGetInteger("global_"+tokenId.getAssetString()+"_balance"), PSupply+PIssued, PSupply))
     ]
   }
@@ -269,8 +265,9 @@ func handlePoolTokensRedeem(PRedeemed: Int, userAddress: Address) = {
       (Scale16.toBigInt() - psuppl), Bk.toBigInt(), Scale16.toBigInt(), CEILING).toInt()
 
     accum ++ [
-      IntegerEntry("global_"+tokenId.getAssetString()+"_balance", fraction(tryGetInteger("global_"+tokenId.getAssetString()+"_balance"), PSupply-PRedeemed, PSupply)),
-      ScriptTransfer(userAddress, amount, tokenId)
+        IntegerEntry("global_"+tokenId.getAssetString()+"_factBalance", tryGetInteger("global_"+tokenId.getAssetString()+"_factBalance") - amount),
+        IntegerEntry("global_"+tokenId.getAssetString()+"_balance", fraction(tryGetInteger("global_"+tokenId.getAssetString()+"_balance"), PSupply-PRedeemed, PSupply)),
+        ScriptTransfer(userAddress, amount, tokenId)
     ]
   }
 
@@ -510,6 +507,7 @@ func deInit() = {
 @Callable(i)
 func init(vBalancesStr: String) = {
   let vBalances = parstStrToIntList(vBalancesStr)
+
   func prepareList() = {
     func handler(accum: List[IntegerEntry], assetId:ByteVector|Unit) = {
       let n = assetIds.indexOf(assetId).value()
@@ -518,6 +516,13 @@ func init(vBalancesStr: String) = {
       ]
     }
     FOLD<10>(assetIds, [], handler)
+  }
+
+  func prepareList2() = {
+    func handler1(accum: List[IntegerEntry], payment: AttachedPayment) = {
+        accum ++ [ IntegerEntry("global_" + payment.assetId.getAssetString() + "_factBalance", payment.amount) ]
+    }
+    FOLD<10>(i.payments, [], handler1)
   }
 
   func calculatePoolTokensAmount(assetId: List[ByteVector|Unit]) = {
@@ -539,10 +544,10 @@ func init(vBalancesStr: String) = {
     let initialPoolTokens = calculatePoolTokensAmount(assetIds)
 
     if (initialPoolTokens == 0) then {throw("you need a bigger tokens amount to launch the pool")} else {
-      let poolTokenIssue = Issue("PZ " + tryGetString("static_poolDomain"), "Puzzle Swap 2.0: pool index token", initialPoolTokens, PoolTokenDecimals, true, unit, 0)
-      let poolTokenId = poolTokenIssue.calculateAssetId()
+        let poolTokenIssue = Issue("PZ " + tryGetString("static_poolDomain"), "Puzzle Swap 2.0: pool index token", initialPoolTokens, PoolTokenDecimals, true, unit, 0)
+        let poolTokenId = poolTokenIssue.calculateAssetId()
 
-      prepareList() ++
+        prepareList() ++ prepareList2() ++
       [
         # poolTokenIssue,
         IntegerEntry("global_poolToken_amount", initialPoolTokens),
@@ -654,16 +659,6 @@ func evaluateClaim(user: String) = {
 }
 
 @Callable(i)
-func withdrawLiquidity(assetIdStr: String, amount: Int) = {
-  if (i.caller.toString() != tryGetString("static_poolOwner")) then {throw("this call available only for pool owner")}
-  else {
-    [
-      ScriptTransfer(tryGetString("static_poolOwner").addressFromStringValue(), amount, assetIdStr.getAssetBytes())
-    ]
-  }
-}
-
-@Callable(i)
 func swap(assetOut: String, minimum: Int) = {
   # throw("stop")
   # markup all assets
@@ -698,7 +693,7 @@ func swap(assetOut: String, minimum: Int) = {
   else if (AssetOut == AssetIn) then {
     throw("this swap is not allowed")
   }
-  else if (AssetOutBalance - AmountOut < 0) then {
+  else if (getFactBalance(assetOut) - AmountOut < 0) then {
     throw("contract is out of reserves")
   }
   else if (isShutdown()) then {
@@ -715,6 +710,8 @@ func swap(assetOut: String, minimum: Int) = {
     # prepare state changes
     let assetInChange = IntegerEntry("global_"+AssetIn.getAssetString()+"_balance", newBalanceIn)
     let assetOutChange = IntegerEntry("global_"+assetOut+"_balance", newBalanceOut)
+    let assetInFactChange = IntegerEntry("global_"+AssetIn.getAssetString()+"_factBalance", tryGetInteger("global_"+AssetIn.getAssetString()+"_factBalance")+cleanAmountIn)
+    let assetOutFactChange = IntegerEntry("global_"+assetOut+"_factBalance", tryGetInteger("global_"+assetOut+"_factBalance")-AmountOut)
 
     let volumeUsdUpdate = calculateUsdValue(AssetIn, AmountIn, AssetInBalance)
 
@@ -776,7 +773,7 @@ func swapReadOnly(assetIn: String, assetOut: String, AmountIn: Int) = {
   if (AssetOut == AssetIn) then {
     throw("this swap is not allowed")
   }
-  else if (AssetOutBalance - AmountOut < 0) then {
+  else if (getFactBalance(assetOut) - AmountOut < 0) then {
     throw("contract is out of reserves")
   }
   else if (isShutdown()) then {
