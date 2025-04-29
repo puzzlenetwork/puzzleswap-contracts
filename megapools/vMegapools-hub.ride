@@ -1,0 +1,34 @@
+{-# STDLIB_VERSION 6 #-}
+{-# CONTENT_TYPE DAPP #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+{-# IMPORT artifacts/mainnet.ride #-}
+
+
+let shutdownAddresses = [
+  "3PMKAL4cd77onkYuuU35115Wov1sLMEcFsv",
+  "3P9xX849YJXg7C87v82cDyDy5VhKiPJpHo8"
+]
+
+
+@Callable(i)
+func addPool(address: String) = {
+  if (i.caller == this) then {
+    [
+      StringEntry("global_pools", getString("global_pools").valueOrElse("") + address + ",")
+    ]
+  } else {
+    throw("no access")
+  }
+} 
+
+
+@Callable(i)
+func shutdownAssetIn(assetStr: String, val: Boolean) = {
+  if (shutdownAddresses.indexOf(i.caller.toString()) != unit) then {
+    [
+      BooleanEntry("global_shutdownIn_"+assetStr, val)
+    ]
+  } else {
+    throw("no access")
+  }
+} 
