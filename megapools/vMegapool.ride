@@ -1,11 +1,13 @@
 {-# STDLIB_VERSION 6 #-}
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
+{-# IMPORT artifacts/mainnet.ride #-}
 
 # TODO
 # index staking interest
+# verify ebough tokens attached in init()
 
-let VERSION = "PZ-2.0.6 PROD"
+let VERSION = "PZ-2.0.7 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -720,6 +722,8 @@ func swap(assetOut: String, minimum: Int) = {
         # change state with new balance values
         assetOutChange,
         assetInChange,
+        assetInFactChange,
+        assetOutFactChange,
 
         # send amountOut to the user
         ScriptTransfer(i.caller, AmountOut, AssetOut),
