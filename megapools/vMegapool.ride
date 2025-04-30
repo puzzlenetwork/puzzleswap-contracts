@@ -6,7 +6,7 @@
 # TODO
 # verify if one token provided in init() works
 
-let VERSION = "PZ-2.0.8 PROD"
+let VERSION = "PZ-2.0.10 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -497,7 +497,8 @@ func init(vBalancesStr: String) = {
     func handler(accum: List[IntegerEntry], assetId:ByteVector|Unit) = {
       let n = assetIds.indexOf(assetId).value()
       accum ++ [
-        IntegerEntry("global_" + assetId.getAssetString() + "_balance", vBalances[n])
+        IntegerEntry("global_" + assetId.getAssetString() + "_balance", vBalances[n]),
+        IntegerEntry("global_lastCheck_" + assetId.getAssetString() + "_interest", 0)
       ]
     }
     FOLD<10>(assetIds, [], handler)
@@ -560,7 +561,7 @@ func generateIndex(needChange: Boolean) = {
 
       let PIssuedWithMult = fraction(PIssuedNoMult, Scale16, getKMult(), DOWN)
       
-      (result ++ [
+      (result ++ claimResult(i.caller)._1 ++ [
         IntegerEntry(i.caller.toString()+"_indexStaked", tryGetInteger(i.caller.toString()+"_indexStaked") + PIssuedWithMult),
         IntegerEntry("global_indexStaked", tryGetInteger("global_indexStaked") + PIssuedWithMult),
         IntegerEntry("global_poolToken_amount", tryGetInteger("global_poolToken_amount") + PIssuedWithMult)
@@ -570,7 +571,7 @@ func generateIndex(needChange: Boolean) = {
 }
 
 @Callable(i)
-func redeemIndex(sendToOrigin: Boolean, poolTokenAmount: Int) = {
+func redeemIndex(poolTokenAmount: Int) = {
   if (poolTokenAmount > tryGetInteger(i.caller.toString() + "_indexStaked")) then {
     throw("user doesn't have this amount of pool tokens")
   } else if (isShutdown()) then {
@@ -578,9 +579,9 @@ func redeemIndex(sendToOrigin: Boolean, poolTokenAmount: Int) = {
   } else {
     let PRedeemedWithMult = poolTokenAmount
     let PRedeemedWithNoMult = fraction(PRedeemedWithMult, getKMult(), Scale16, DOWN)
-    let result = handlePoolTokensRedeem(PRedeemedWithNoMult, if (sendToOrigin) then {i.originCaller} else {i.caller})
+    let result = handlePoolTokensRedeem(PRedeemedWithNoMult, i.caller)
 
-    result ++ [
+    result ++ claimResult(i.caller)._1 ++ [
       IntegerEntry(i.caller.toString() + "_indexStaked", tryGetInteger(i.caller.toString() + "_indexStaked") - PRedeemedWithMult),
       IntegerEntry("global_indexStaked", tryGetInteger("global_indexStaked") - PRedeemedWithMult),
       IntegerEntry("global_poolToken_amount", tryGetInteger("global_poolToken_amount") - PRedeemedWithMult)
