@@ -4,10 +4,9 @@
 {-# IMPORT artifacts/mainnet.ride #-}
 
 # TODO
-# index staking interest
-# verify ebough tokens attached in init()
+# verify if one token provided in init() works
 
-let VERSION = "PZ-2.0.7 PROD"
+let VERSION = "PZ-2.0.8 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -122,7 +121,7 @@ let masterPubKey = fromBase58String(getString(CONFIG_ADDRESS, "masterPubKey").va
 let oracleAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "oracleAddress").valueOrElse("3P8d1E1BLKoD52y3bQJ1bDTd2TD1gpaLn9t")))
 let stakingAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "stakingAddress").valueOrElse("3PFTbywqxtFfukX3HyT881g4iW5K4QL3FAS")))
 let feesAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "feesAddress").valueOrElse("3PFWAVKmXjfHXyzJb12jCbhP4Uhi9t4uWiD")))
-let poolsHubAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "poolsHubAddress").valueOrElse("3P5YutjDNC3hABBVsveFuZTTbQ5PdtSDBgk")))
+let poolsHubAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "poolsHubAddress").valueOrElse("3P5RGYyCnELF8JTPxgX54dBGzwkQMKUJ5H7")))
 let shutdownAddressStr = getString(CONFIG_ADDRESS, "shutdownAddress").valueOrElse("3PEpv9hRFWEEBU22WRnLsw1bH4YGtcU728o")
 let layer2Addresses = getString(CONFIG_ADDRESS, "layer2Addresses").valueOrElse("3PR1Qvi9mHT35SwWEkLSqqE2L8thiPLdVWU,3PQoBfUKHkJAeGWhooLP7WS8ovb54av9Jp2")
 let govAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "govAddress").valueOrElse("3P6uro9xCsE8te78QZjzqy7aq8natSzdceC")))
@@ -294,37 +293,19 @@ func calculateOutAmount(AmountIn: Int, assetIn: ByteVector|Unit, assetOut: ByteV
   }
 }
 
-func calculateCurrentAssetInterest(assetId: ByteVector|Unit, assetIdStr: String, aBalance: Int, tokenEarningsLastCheck: Int) = {
-  let totalStaked = tryGetInteger("global_indexStaked")
-
-  let tokenBalanceLastCheck = tokenEarningsLastCheck
-  let currentBalanceDelta = getTokenBalance(assetId) - aBalance
-  let currentTokenEarnings = if (currentBalanceDelta > tokenBalanceLastCheck) then {currentBalanceDelta} else {tokenBalanceLastCheck}
-
-  let newEarnings = currentTokenEarnings - tokenBalanceLastCheck
-  let newInterest = if (totalStaked == 0) then {0} else {fraction(newEarnings, Scale8, totalStaked)}
-  let lastCheckInterest = tryGetInteger("global_lastCheck_" + assetIdStr + "_interest")
-  lastCheckInterest + newInterest
-}
-
 func claimResult(address: Address) = {
   let addressStr = address.toString()
-  let puzzleAmount = tryGetInteger(addressStr + "_indexStaked")
+  let indexAmount = tryGetInteger(addressStr + "_indexStaked")
 
   func handler(accum: (List[IntegerEntry|ScriptTransfer], Int), assetId: ByteVector|Unit) = {
     let assetIdStr = assetId.getAssetString()
+    let currentTokenInterest = tryGetInteger("global_lastCheck_" + assetIdStr + "_interest")    
     let aBalance = tryGetInteger("global_"+assetId.getAssetString()+"_balance")
-    let tokenEarningsLastCheck = tryGetInteger("global_lastCheck_" + assetIdStr + "_earnings")
 
-    let currentTokenInterest = calculateCurrentAssetInterest(assetId, assetIdStr, aBalance, tokenEarningsLastCheck)
-    let currentTokenEarnings = max([tokenEarningsLastCheck, getTokenBalance(assetId) - aBalance])
-
-    let rewardAmount = fraction(puzzleAmount, (currentTokenInterest - tryGetInteger(addressStr + "_lastCheck_" + assetIdStr + "_interest")), Scale8)
+    let rewardAmount = fraction(indexAmount, (currentTokenInterest - tryGetInteger(addressStr + "_lastCheck_" + assetIdStr + "_interest")), Scale8)
     
     let transfer = if (rewardAmount == 0) then {[]} else {[ScriptTransfer(address, rewardAmount, assetId)]}
     (accum._1 ++ transfer ++ [
-      IntegerEntry("global_lastCheck_" + assetIdStr + "_earnings", currentTokenEarnings - rewardAmount),
-      IntegerEntry("global_lastCheck_" + assetIdStr + "_interest", currentTokenInterest),
       IntegerEntry(addressStr + "_lastCheck_" + assetIdStr + "_interest", currentTokenInterest)
     ], accum._2 + calculateUsdValue(assetId, rewardAmount, aBalance))
   }
@@ -489,6 +470,8 @@ func preInit(assetIdsStr: String, assetWeightsStr: String, baseTokenIdStr: Strin
         StringEntry("static_poolOwner", poolOwner),
         IntegerEntry("static_fee", fee),
         IntegerEntry("static_KMult", Scale16),
+        IntegerEntry("global_indexStaked", 0),
+        IntegerEntry("global_poolToken_amount", 0),
         IntegerEntry("global_wasPreInited", 1)
       ]
     }
@@ -540,6 +523,8 @@ func init(vBalancesStr: String) = {
 
   if (isShutdown()) then {
     throw("contract is on stop")
+  } else if (i.payments.size() == 0) then {
+    throw("at least some of the assets should be provided as payment")
   } else if (tryGetInteger("global_wasInited") > 0) then {  # PROD: > 0
     throw("pool already inited")
   } else {
@@ -577,6 +562,7 @@ func generateIndex(needChange: Boolean) = {
       
       (result ++ [
         IntegerEntry(i.caller.toString()+"_indexStaked", tryGetInteger(i.caller.toString()+"_indexStaked") + PIssuedWithMult),
+        IntegerEntry("global_indexStaked", tryGetInteger("global_indexStaked") + PIssuedWithMult),
         IntegerEntry("global_poolToken_amount", tryGetInteger("global_poolToken_amount") + PIssuedWithMult)
       ], PIssuedWithMult)
     }
@@ -596,55 +582,56 @@ func redeemIndex(sendToOrigin: Boolean, poolTokenAmount: Int) = {
 
     result ++ [
       IntegerEntry(i.caller.toString() + "_indexStaked", tryGetInteger(i.caller.toString() + "_indexStaked") - PRedeemedWithMult),
+      IntegerEntry("global_indexStaked", tryGetInteger("global_indexStaked") - PRedeemedWithMult),
       IntegerEntry("global_poolToken_amount", tryGetInteger("global_poolToken_amount") - PRedeemedWithMult)
     ]
   }
 }
 
-@Callable(i)
-func stakeIndex() = {
-  let addressStr = i.originCaller.toString()
-  let pmt = i.payments[0]
+# @Callable(i)
+# func stakeIndex() = {
+#   let addressStr = i.originCaller.toString()
+#   let pmt = i.payments[0]
 
-  if (pmt.assetId.value() != tryGetBinary("global_poolToken_id")) then {throw("wrong asset attached")} else {
-    indexStakeResult(addressStr, pmt.amount)
-  }
-}
+#   if (pmt.assetId.value() != tryGetBinary("global_poolToken_id")) then {throw("wrong asset attached")} else {
+#     indexStakeResult(addressStr, pmt.amount)
+#   }
+# }
 
-@Callable(i)
-func stakeIndexFor(addressStr: String) = {
-  let pmt = i.payments[0]
+# @Callable(i)
+# func stakeIndexFor(addressStr: String) = {
+#   let pmt = i.payments[0]
 
-  if (pmt.assetId.value() != tryGetBinary("global_poolToken_id")) then {throw("wrong asset attached")} else {
-    indexStakeResult(addressStr, pmt.amount)
-  }
-}
+#   if (pmt.assetId.value() != tryGetBinary("global_poolToken_id")) then {throw("wrong asset attached")} else {
+#     indexStakeResult(addressStr, pmt.amount)
+#   }
+# }
 
-@Callable(i)
-func unstakeIndex(indexAmount: Int) = {
-  # unstakes for i.originCaller if used one of 2 known layer2 addresses; for i.caller otherwise
+# @Callable(i)
+# func unstakeIndex(indexAmount: Int) = {
+#   # unstakes for i.originCaller if used one of 2 known layer2 addresses; for i.caller otherwise
 
-  let addressStr = if (layer2Addresses.indexOf(i.caller.toString()) != unit) then {
-    i.originCaller.toString()
-  } else {
-    i.caller.toString()
-  }
+#   let addressStr = if (layer2Addresses.indexOf(i.caller.toString()) != unit) then {
+#     i.originCaller.toString()
+#   } else {
+#     i.caller.toString()
+#   }
 
-  let indexAvailable = tryGetInteger(addressStr + "_indexStaked")
-  if (isShutdown()) then {
-    throw("contract is on stop")
-  } else if (indexAmount > indexAvailable) then {throw("you don't have index tokens available")} 
-  else if (isShutdown()) then {
-    throw("contract is on stop")
-  } 
-  else {
-    claimResult(addressStr.addressFromStringValue())._1 ++ [
-      IntegerEntry(addressStr + "_indexStaked", indexAvailable - indexAmount),
-      IntegerEntry("global_indexStaked", tryGetInteger("global_indexStaked") - indexAmount),
-      ScriptTransfer(i.caller, indexAmount, getBinaryValue("global_poolToken_id"))
-    ]
-  }
-}
+#   let indexAvailable = tryGetInteger(addressStr + "_indexStaked")
+#   if (isShutdown()) then {
+#     throw("contract is on stop")
+#   } else if (indexAmount > indexAvailable) then {throw("you don't have index tokens available")} 
+#   else if (isShutdown()) then {
+#     throw("contract is on stop")
+#   } 
+#   else {
+#     claimResult(addressStr.addressFromStringValue())._1 ++ [
+#       IntegerEntry(addressStr + "_indexStaked", indexAvailable - indexAmount),
+#       IntegerEntry("global_indexStaked", tryGetInteger("global_indexStaked") - indexAmount),
+#       ScriptTransfer(i.caller, indexAmount, getBinaryValue("global_poolToken_id"))
+#     ]
+#   }
+# }
 
 @Callable(i)
 func claimIndexRewards() = {
@@ -701,9 +688,19 @@ func swap(assetOut: String, minimum: Int) = {
   else if (isShutdown()) then {
     throw("contract is on stop")
   }
+  else if (poolsHubAddress.getBoolean("global_shutdownIn_"+assetIn).valueOrElse(false)) then {
+    throw("token trades are stopped")
+  }
   else {
-    # top up protocol fee
-    let protocolFee = fraction(feeAmountIn, 10, 10)
+    # distribute fees
+    let protocolFee = fraction(feeAmountIn, 5, 10)
+    let lpFee = feeAmountIn - protocolFee
+    let interestChange = {
+        # TODO: handle totalIndex = 0
+        let totalIndex = tryGetInteger("global_indexStaked")
+        let interestDelta = fraction(lpFee, Scale8, totalIndex)
+        IntegerEntry("global_lastCheck_"+assetIn+"_interest", tryGetInteger("global_lastCheck_"+assetIn+"_interest") + interestDelta)
+    }
   
     # calculate state changes
     let newBalanceIn = AssetInBalance2
@@ -732,7 +729,10 @@ func swap(assetOut: String, minimum: Int) = {
         IntegerEntry("global_volume_usd", tryGetInteger("global_volume_usd") + volumeUsdUpdate),
 
         # send platform fee
-        ScriptTransfer(feesAddress, protocolFee, assetIn.getAssetBytes())
+        ScriptTransfer(feesAddress, protocolFee, assetIn.getAssetBytes()),
+
+        # account LP fee
+        interestChange
       ], 
       AmountOut
     )
