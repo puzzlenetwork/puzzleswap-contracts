@@ -3,7 +3,7 @@
 {-# CONTENT_TYPE DAPP #-}
 {-# IMPORT artifacts/mainnet.ride #-}
 
-let VERSION = "PZSTAKING-1.0.0"
+let VERSION = "PZSTAKING-1.1.0"
 
 let usdnId = base58'DG2xFkPdDwKUoBkzGAhQtLpSGzfXLiCYPEzeKH2Ad24p'
 let usdnIdStr = "DG2xFkPdDwKUoBkzGAhQtLpSGzfXLiCYPEzeKH2Ad24p"
@@ -55,6 +55,22 @@ func stake () = {
         then throw("wrong asset attached")
         else (
             claimResult(i.caller) ++ 
+            [
+                IntegerEntry("global_staked", (totalStakedAmount + amount)), 
+                IntegerEntry((addressStr + "_staked"), (tryGetInteger((addressStr + "_staked")) + amount))
+            ]
+        )
+}
+
+
+@Callable(i)
+func stakeFor (addressStr: String) = {
+    let amount = i.payments[0].amount
+    let totalStakedAmount = tryGetInteger("global_staked")
+    if ((i.payments[0].assetId != puzzleId))
+        then throw("wrong asset attached")
+        else (
+            claimResult(addressStr.addressFromStringValue()) ++ 
             [
                 IntegerEntry("global_staked", (totalStakedAmount + amount)), 
                 IntegerEntry((addressStr + "_staked"), (tryGetInteger((addressStr + "_staked")) + amount))
