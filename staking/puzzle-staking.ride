@@ -1,6 +1,9 @@
 {-# STDLIB_VERSION 6 #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 {-# CONTENT_TYPE DAPP #-}
+{-# IMPORT artifacts/mainnet.ride #-}
+
+let VERSION = "PZSTAKING-1.0.0"
 
 let usdnId = base58'DG2xFkPdDwKUoBkzGAhQtLpSGzfXLiCYPEzeKH2Ad24p'
 let usdnIdStr = "DG2xFkPdDwKUoBkzGAhQtLpSGzfXLiCYPEzeKH2Ad24p"
@@ -47,8 +50,6 @@ func claimResult (address: Address) = (claimAliasResult(address, usdnIdStr) ++ c
 func stake () = {
     let amount = i.payments[0].amount
     let addressStr = toString(i.caller)
-
-    let assetIdStr = toBase58String(usdnId)
     let totalStakedAmount = tryGetInteger("global_staked")
     if ((i.payments[0].assetId != puzzleId))
         then throw("wrong asset attached")
@@ -60,6 +61,7 @@ func stake () = {
             ]
         )
 }
+
 
 
 @Callable(i)
@@ -110,7 +112,7 @@ func topUpReward () = {
             IntegerEntry((("global_lastCheck_" + puzzleIdStr) + "_interest"), (currentInterest + interestDelta))
         ], amount)
     } else {
-        [ScriptTransfer(Address(base58'3PFWAVKmXjfHXyzJb12jCbhP4Uhi9t4uWiD'), pmtAmount, pmtAsset)]
+        [ScriptTransfer(Address(base58'3PFWAVKmXjfHXyzJb12jCbhP4Uhi9t4uWiD'), pmtAmount, usdnId)]
     }
 }
 
