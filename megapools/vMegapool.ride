@@ -6,7 +6,7 @@
 # TODO
 # verify if one token provided in init() works
 
-let VERSION = "PZ-2.0.10 PROD"
+let VERSION = "PZ-2.0.11 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -302,7 +302,7 @@ func claimResult(address: Address) = {
     let currentTokenInterest = tryGetInteger("global_lastCheck_" + assetIdStr + "_interest")    
     let aBalance = tryGetInteger("global_"+assetId.getAssetString()+"_balance")
 
-    let rewardAmount = fraction(indexAmount, (currentTokenInterest - tryGetInteger(addressStr + "_lastCheck_" + assetIdStr + "_interest")), Scale8)
+    let rewardAmount = fraction(indexAmount, (currentTokenInterest - tryGetInteger(addressStr + "_lastCheck_" + assetIdStr + "_interest")), Scale16)
     
     let transfer = if (rewardAmount == 0) then {[]} else {[ScriptTransfer(address, rewardAmount, assetId)]}
     (accum._1 ++ transfer ++ [
@@ -699,7 +699,7 @@ func swap(assetOut: String, minimum: Int) = {
     let interestChange = {
         # TODO: handle totalIndex = 0
         let totalIndex = tryGetInteger("global_indexStaked")
-        let interestDelta = fraction(lpFee, Scale8, totalIndex)
+        let interestDelta = fraction(lpFee, Scale16, totalIndex)
         IntegerEntry("global_lastCheck_"+assetIn+"_interest", tryGetInteger("global_lastCheck_"+assetIn+"_interest") + interestDelta)
     }
   
