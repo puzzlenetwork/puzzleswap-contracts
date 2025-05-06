@@ -7,7 +7,7 @@
 # verify if one token provided in init() works
 # indefinite ranges
 
-let VERSION = "PZ-2.0.14 PROD"
+let VERSION = "PZ-2.0.16 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -453,6 +453,19 @@ func getP1P2(assetIdStr: String, baseAssetIdStr: String) = {
 ## CALLABLE METHODS ##
 
 @Callable(i)
+func addUnderlyingStaker(stakerAddress: String, assetIdStr: String) = {
+    if (this != i.caller) then {throw("admin only")}
+    else {
+
+        [
+            StringEntry("static_stakingContract_"+assetIdStr, stakerAddress)
+        ]
+
+    }
+}
+
+
+@Callable(i)
 func preInit(assetIdsStr: String, assetWeightsStr: String, baseTokenIdStr: String, poolDomain: String, poolOwner: String, fee: Int) = {
   let poolOwnerAddress = Address(poolOwner.fromBase58String())
 
@@ -747,7 +760,7 @@ func swap(assetOut: String, minimum: Int) = {
 
     # stake/unstake assets
     strict stakeTx = stakeIfNeeded(assetIn, cleanAmountIn)
-    strict unstakeTx = stakeIfNeeded(assetOut, AmountOut)
+    strict unstakeTx = unstakeIfNeeded(assetOut, AmountOut)
 
     # calculate state changes
     let newBalanceIn = AssetInBalance2
