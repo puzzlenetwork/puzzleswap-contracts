@@ -1,0 +1,151 @@
+{-# STDLIB_VERSION 6 #-}
+{-# CONTENT_TYPE DAPP #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+{-# IMPORT artifacts/mainnet.ride #-}
+
+
+let VERSION = "PZRS-0.1.0"
+
+
+func tryGetInteger(key: String) = {
+  match getInteger(this, key) {
+      case b:Int => b
+      case _ => 0
+  }
+}
+
+func tryGetString(key: String) = {
+  match getString(this, key) {
+      case b:String => b
+      case _ => ""
+  }
+}
+
+let parent = tryGetString("setup_parentRange").addressFromString().valueOrElse(Address(base58''))
+let underlyingContract = tryGetString("setup_underlyingContract").addressFromString().valueOrElse(Address(base58''))
+let pzId = tryGetString("setup_stakedAssetId").fromBase58String()
+let pzIdStr = pzId.toBase58String()
+let pzUnderlyings = []
+
+
+let DistributeIterations = getInteger(this, "setup_distributeIterations").valueOrElse(6)
+let DistributeDelay = getInteger(this, "setup_distributeDelay").valueOrElse(60 * 4)
+
+func getAssetString(assetId: ByteVector|Unit) = {
+  match assetId {
+    case b:ByteVector => b.toBase58String()
+    case _ => "WAVES"
+  }
+}
+
+func getAssetBytes(assetIdStr: String) = {
+  if (assetIdStr == "WAVES") then {unit} else {assetIdStr.fromBase58String()}
+}
+
+func getBalance(assetIdStr: String) = {
+  if (assetIdStr == "WAVES") then {wavesBalance(this).available} else {assetBalance(this, assetIdStr.fromBase58String())}
+}
+
+func tokenToSwap(assetIdStr: String) = {if (assetIdStr == "WAVES") then max([getBalance("WAVES") - 10000000, 0]) else getBalance(assetIdStr)}
+
+
+
+@Callable(i)
+func init(parentAddress: String, underlyingAddress: String, assetId: String) = {
+    # TODO: add checks that addresses are valid
+    
+    if (i.caller != this) then {throw("only available for self invoke")}
+    else {
+
+        [
+            StringEntry("setup_parentRange", parentAddress),
+            StringEntry("setup_underlyingContract", underlyingAddress),
+            StringEntry("setup_stakedAssetId", assetId)
+        ]
+
+    }
+}
+
+
+@Callable(i)
+func stake() = {
+    if (i.caller != parent) then {throw("only available for parent range contract")}
+    else {
+
+        strict inv = invoke(underlyingContract, "stakeIndexFor", [i.caller.toString()], i.payments)
+        []
+
+    }
+}
+
+
+@Callable(i)
+func unstake(amount: Int) = {
+    if (i.caller != parent) then {throw("only available for parent range contract")}
+    else {
+
+        strict inv = invoke(underlyingContract, "unstakeIndex", [amount], i.payments)
+
+        [
+            ScriptTransfer(parent, amount, pzId)
+        ]
+
+    }
+}
+
+
+@Callable(i)
+func payoutRewards() = {
+    
+    let pzPool = underlyingContract
+    let pzTokens = getStringValue(pzPool, "static_tokenIds").split(",")
+    let pzBaseT = getStringValue(pzPool, "static_baseTokenId")
+
+    # claim rewards
+    strict inv1 = invoke(pzPool, "claimIndexRewards", [], [])
+
+    # swap all rewards to base token
+    func f2(accum: List[AttachedPayment], next: String) = {
+      if (next != pzBaseT) then {
+        strict inv3 = invoke(pzPool, "swap", [pzBaseT, 0], [AttachedPayment(next.getAssetBytes(), tokenToSwap(next))])
+        accum
+      } else {accum}
+    }
+    strict swapsInvokes = FOLD<10>(pzTokens, [], f2)
+    strict toDeposit = tokenToSwap(pzBaseT)
+
+    # swap base token among all asssets in composition
+    func handler(accum: List[AttachedPayment], assetIdStr: String) = {
+      if (assetIdStr == pzBaseT) then {accum} else {
+        let assetId = assetIdStr.getAssetBytes()
+        let assetWeight = getIntegerValue(pzPool, "static_" + assetIdStr + "_weight")
+        let amount = fraction(toDeposit, assetWeight, 10000)
+        strict in = match reentrantInvoke(pzPool, "swap", [assetIdStr, 0], [AttachedPayment(pzBaseT.getAssetBytes(), amount)]) {
+              case x: Int => x
+              case _ => 0
+        }
+        accum ++ [AttachedPayment(assetId, in)]
+      }
+    }
+
+    let baseAssetWeight = getIntegerValue(pzPool, "static_" + pzBaseT + "_weight")
+    let basePayAmount = fraction(toDeposit, baseAssetWeight, 10000)
+    strict exchangeInvokes = FOLD<9>(pzTokens, [AttachedPayment(pzBaseT.getAssetBytes(), basePayAmount)], handler)
+
+    # generate pz
+    strict generateInvoke = match reentrantInvoke(pzPool, "generateIndex", [false], exchangeInvokes) {
+      case x: Int => x
+      case _ => 0
+    }
+    let lpAmount = getBalance(pzIdStr)
+
+    # distributing pz
+    let toDistribute = lpAmount / DistributeIterations
+    strict inv5 = invoke(parent, "addInterestExternal", [], [AttachedPayment(pzId, toDistribute)])
+
+    [
+      IntegerEntry("stats_lastDistribution_"+pzIdStr, height),
+      IntegerEntry("stats_totalDistributed_"+pzIdStr, getInteger("stats_totalDistributed_"+pzIdStr).valueOrElse(0) + toDistribute)
+    ]
+
+}
