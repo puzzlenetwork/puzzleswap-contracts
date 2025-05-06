@@ -7,7 +7,7 @@
 # verify if one token provided in init() works
 # indefinite ranges
 
-let VERSION = "PZ-2.0.12 PROD"
+let VERSION = "PZ-2.0.14 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -156,6 +156,24 @@ func getCurrentTokenBalance(tokenNum: Int) = {
   tryGetInteger("global_"+tokenIdStr+"_balance")
 }
 
+func stakeIfNeeded(assetIdStr: String, amount: Int) = {
+    strict stakeTx = {
+        if (tryGetString("static_stakingContract_"+assetIdStr) != "") then {
+            invoke(tryGetString("static_stakingContract_"+assetIdStr).addressFromStringValue(), "stake", [], [AttachedPayment(assetIdStr.getAssetBytes(), amount)])
+        } else unit
+    }
+    true
+}
+
+func unstakeIfNeeded(assetIdStr: String, amount: Int) = {
+    strict unstakeTx = {
+        if (tryGetString("static_stakingContract_"+assetIdStr) != "") then {
+            invoke(tryGetString("static_stakingContract_"+assetIdStr).addressFromStringValue(), "unstake", [amount], [])
+        } else unit
+    }
+    true
+}
+
 func getKMult() = {
   match getInteger("static_KMult") {
     case x: Int => x
@@ -245,6 +263,7 @@ func handlePoolTokensAdd(PIssued: Int, payments: List[AttachedPayment], userAddr
     let Dk = fraction(a1 - tokenDecimals.toBigInt()*Scale8.toBigInt(), Bk.toBigInt(), tokenDecimals.toBigInt()*Scale8.toBigInt(), CEILING).toInt()  # deposited amount of token K
 
     let toReturn = paymentAmount - Dk
+    strict stakeTx = stakeIfNeeded(tokenId.getAssetString(), Dk)
 
     let t = if (needChange && toReturn > 0) then {[ScriptTransfer(userAddress, toReturn, tokenId)]} else {[]}
     accum ++ t ++ [
@@ -265,6 +284,8 @@ func handlePoolTokensRedeem(PRedeemed: Int, userAddress: Address) = {
     let psuppl = fraction(((PSupply - PRedeemed).toBigInt()*Scale8.toBigInt()), Scale8.toBigInt(), PSupply.toBigInt(), DOWN)
     let amount = fraction(
       (Scale16.toBigInt() - psuppl), Bk.toBigInt(), Scale16.toBigInt(), CEILING).toInt()
+
+    strict unstakeTx = unstakeIfNeeded(tokenId.getAssetString(), amount)
 
     accum ++ [
         IntegerEntry("global_"+tokenId.getAssetString()+"_factBalance", tryGetInteger("global_"+tokenId.getAssetString()+"_factBalance") - amount),
@@ -514,6 +535,7 @@ func init(vBalancesStr: String) = {
 
   func prepareList2() = {
     func handler1(accum: List[IntegerEntry], payment: AttachedPayment) = {
+        strict stakeTx = stakeIfNeeded(payment.assetId.getAssetString(), payment.amount)
         accum ++ [ IntegerEntry("global_" + payment.assetId.getAssetString() + "_factBalance", payment.amount) ]
     }
     FOLD<10>(i.payments, [], handler1)
@@ -722,7 +744,11 @@ func swap(assetOut: String, minimum: Int) = {
     let lpFee = feeAmountIn - protocolFee
     let interestChange = calcInterestChange(assetIn, lpFee)
     let statsChange = IntegerEntry("global_feesEarned_"+assetIn, tryGetInteger("global_feesEarned_"+assetIn) + lpFee)
-  
+
+    # stake/unstake assets
+    strict stakeTx = stakeIfNeeded(assetIn, cleanAmountIn)
+    strict unstakeTx = stakeIfNeeded(assetOut, AmountOut)
+
     # calculate state changes
     let newBalanceIn = AssetInBalance2
     let newBalanceOut = AssetOutBalance2
