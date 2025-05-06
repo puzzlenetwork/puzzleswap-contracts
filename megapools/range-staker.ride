@@ -4,7 +4,7 @@
 {-# IMPORT artifacts/mainnet.ride #-}
 
 
-let VERSION = "PZRS-0.1.0"
+let VERSION = "PZRS-0.2.0"
 
 
 func tryGetInteger(key: String) = {
@@ -72,7 +72,7 @@ func stake() = {
     if (i.caller != parent) then {throw("only available for parent range contract")}
     else {
 
-        strict inv = invoke(underlyingContract, "stakeIndexFor", [i.caller.toString()], i.payments)
+        strict inv = invoke(underlyingContract, "stakeIndexFor", [this.toString()], i.payments)
         []
 
     }
@@ -84,7 +84,7 @@ func unstake(amount: Int) = {
     if (i.caller != parent) then {throw("only available for parent range contract")}
     else {
 
-        strict inv = invoke(underlyingContract, "unstakeIndex", [amount], i.payments)
+        strict inv = invoke(underlyingContract, "unstakeIndex", [amount], [])
 
         [
             ScriptTransfer(parent, amount, pzId)
