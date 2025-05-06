@@ -5,8 +5,9 @@
 
 # TODO
 # verify if one token provided in init() works
+# indefinite ranges
 
-let VERSION = "PZ-2.0.11 PROD"
+let VERSION = "PZ-2.0.12 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -327,6 +328,13 @@ func indexStakeResult(addressStr: String, amount: Int) = {
 
 func sum(accum: Int, n: String) = {accum + n.parseIntValue()}
 func checkFeeAsset(accum: String, next: String) = { if (supportedFeeAssetsStr.indexOf(next) != unit && accum == "") then {next} else {accum} }
+
+func calcInterestChange(assetIdStr: String, lpFee: Int) = {
+    # TODO: handle totalIndex = 0
+    let totalIndex = tryGetInteger("global_indexStaked")
+    let interestDelta = fraction(lpFee, Scale16, totalIndex)
+    IntegerEntry("global_lastCheck_"+assetIdStr+"_interest", tryGetInteger("global_lastCheck_"+assetIdStr+"_interest") + interestDelta)
+}
 
 # REBALANCE: getting union of old and new assets
 func getTmpRebalanceIds(newAssetIdsLi: List[String]) = {
@@ -649,6 +657,22 @@ func evaluateClaim(user: String) = {
 }
 
 @Callable(i)
+func addInterestExternal() = {
+    let assetId = i.payments[0].value().assetId
+    let assetIdStr = assetId.getAssetString()
+    let amount = i.payments[0].amount
+
+    if (assetIds.indexOf(assetId) == unit) then {throw("you can only add interest for assets in the pool")}
+    else {
+        [
+            calcInterestChange(assetIdStr, amount),
+            IntegerEntry("global_extraEarned_"+assetIdStr, tryGetInteger("global_extraEarned_"+assetIdStr) + amount)
+        ]
+    }
+}
+
+
+@Callable(i)
 func swap(assetOut: String, minimum: Int) = {
   # throw("stop")
   # markup all assets
@@ -696,12 +720,8 @@ func swap(assetOut: String, minimum: Int) = {
     # distribute fees
     let protocolFee = fraction(feeAmountIn, 5, 10)
     let lpFee = feeAmountIn - protocolFee
-    let interestChange = {
-        # TODO: handle totalIndex = 0
-        let totalIndex = tryGetInteger("global_indexStaked")
-        let interestDelta = fraction(lpFee, Scale16, totalIndex)
-        IntegerEntry("global_lastCheck_"+assetIn+"_interest", tryGetInteger("global_lastCheck_"+assetIn+"_interest") + interestDelta)
-    }
+    let interestChange = calcInterestChange(assetIn, lpFee)
+    let statsChange = IntegerEntry("global_feesEarned_"+assetIn, tryGetInteger("global_feesEarned_"+assetIn) + lpFee)
   
     # calculate state changes
     let newBalanceIn = AssetInBalance2
@@ -733,7 +753,10 @@ func swap(assetOut: String, minimum: Int) = {
         ScriptTransfer(feesAddress, protocolFee, assetIn.getAssetBytes()),
 
         # account LP fee
-        interestChange
+        interestChange,
+
+        # stats update
+        statsChange
       ], 
       AmountOut
     )
