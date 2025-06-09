@@ -7,7 +7,7 @@
 # verify if one token provided in init() works
 # indefinite ranges
 
-let VERSION = "PZ-2.0.16 PROD"
+let VERSION = "PZ-2.0.17 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -696,6 +696,8 @@ func addInterestExternal() = {
     let assetId = i.payments[0].value().assetId
     let assetIdStr = assetId.getAssetString()
     let amount = i.payments[0].amount
+
+    strict stakeTx = stakeIfNeeded(assetIdStr, amount)
 
     if (assetIds.indexOf(assetId) == unit) then {throw("you can only add interest for assets in the pool")}
     else {
