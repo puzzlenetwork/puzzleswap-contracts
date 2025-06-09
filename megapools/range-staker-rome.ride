@@ -1,9 +1,11 @@
 {-# STDLIB_VERSION 6 #-}
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
+{-# IMPORT artifacts/mainnet.ride #-}
 
 
-let VERSION = "RRS-0.1.0"
+
+let VERSION = "RRS-0.2.0"
 
 
 func tryGetInteger(key: String) = {
@@ -94,7 +96,7 @@ func unstake(amount: Int) = {
 @Callable(i)
 func payoutRewards() = {
 
-  if (DistributeDelay < height - tryGetInteger("stats_lastDistribution_"+romeIdStr)) then {throw("cant distribute yet")}
+  if (DistributeDelay > height - tryGetInteger("stats_lastDistribution_"+romeIdStr)) then {throw("cant distribute yet")}
   else {
     
     # calc rewards
