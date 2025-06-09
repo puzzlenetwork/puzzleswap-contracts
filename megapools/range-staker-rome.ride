@@ -1,0 +1,114 @@
+{-# STDLIB_VERSION 6 #-}
+{-# CONTENT_TYPE DAPP #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+
+
+let VERSION = "RRS-0.1.0"
+
+
+func tryGetInteger(key: String) = {
+  match getInteger(this, key) {
+      case b:Int => b
+      case _ => 0
+  }
+}
+
+func tryGetString(key: String) = {
+  match getString(this, key) {
+      case b:String => b
+      case _ => ""
+  }
+}
+
+let parent = tryGetString("setup_parentRange").addressFromString().valueOrElse(Address(base58''))
+let romeIdStr = tryGetString("setup_stakedAssetId")
+let romeId = romeIdStr.fromBase58String()
+
+let DistributeIterations = getInteger(this, "setup_distributeIterations").valueOrElse(6)
+let DistributeDelay = getInteger(this, "setup_distributeDelay").valueOrElse(60 * 4)
+
+func getAssetString(assetId: ByteVector|Unit) = {
+  match assetId {
+    case b:ByteVector => b.toBase58String()
+    case _ => "WAVES"
+  }
+}
+
+func getAssetBytes(assetIdStr: String) = {
+  if (assetIdStr == "WAVES") then {unit} else {assetIdStr.fromBase58String()}
+}
+
+func getBalance(assetIdStr: String) = {
+  if (assetIdStr == "WAVES") then {wavesBalance(this).available} else {assetBalance(this, assetIdStr.fromBase58String())}
+}
+
+func tokenToSwap(assetIdStr: String) = {if (assetIdStr == "WAVES") then max([getBalance("WAVES") - 10000000, 0]) else getBalance(assetIdStr)}
+
+
+
+@Callable(i)
+func init(parentAddress: String, underlyingAddress: String, assetId: String) = {
+    # TODO: add checks that addresses are valid
+    
+    if (i.caller != this) then {throw("only available for self invoke")}
+    else {
+
+        [
+            StringEntry("setup_parentRange", parentAddress),
+            StringEntry("setup_underlyingContract", underlyingAddress),
+            StringEntry("setup_stakedAssetId", assetId)
+        ]
+
+    }
+}
+
+
+@Callable(i)
+func stake() = {
+    if (i.caller != parent) then {throw("only available for parent range contract")}
+    else if (i.payments[0].assetId != romeId) then {throw("you need to attach ROME token")}
+    else {
+
+        [
+          IntegerEntry("global_stakedAmount_"+romeIdStr, tryGetInteger("global_stakedAmount_"+romeIdStr) + i.payments[0].amount)
+        ]
+
+    }
+}
+
+
+@Callable(i)
+func unstake(amount: Int) = {
+    if (i.caller != parent) then {throw("only available for parent range contract")}
+    else {
+
+        [
+          ScriptTransfer(parent, amount, romeId),
+          IntegerEntry("global_stakedAmount_"+romeIdStr, tryGetInteger("global_stakedAmount_"+romeIdStr) - amount)
+        ]
+
+    }
+}
+
+
+@Callable(i)
+func payoutRewards() = {
+
+  if (DistributeDelay < height - tryGetInteger("stats_lastDistribution_"+romeIdStr)) then {throw("cant distribute yet")}
+  else {
+    
+    # calc rewards
+    strict rewardAmount = tryGetInteger("global_stakedAmount_"+romeIdStr) - getBalance(romeIdStr)
+
+    # distributing rewards
+    let toDistribute = rewardAmount / DistributeIterations
+    strict inv = invoke(parent, "addInterestExternal", [], [AttachedPayment(romeId, toDistribute)])
+
+    [
+      IntegerEntry("stats_lastDistribution_"+romeIdStr, height),
+      IntegerEntry("stats_totalDistributed_"+romeIdStr, getInteger("stats_totalDistributed_"+romeIdStr).valueOrElse(0) + toDistribute)
+    ]
+    
+  }
+
+}
