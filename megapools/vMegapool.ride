@@ -7,7 +7,7 @@
 # verify if one token provided in init() works
 # indefinite ranges
 
-let VERSION = "PZ-2.0.17 PROD"
+let VERSION = "PZ-2.0.18 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -325,11 +325,12 @@ func claimResult(address: Address) = {
     let aBalance = tryGetInteger("global_"+assetId.getAssetString()+"_balance")
 
     let rewardAmount = fraction(indexAmount, (currentTokenInterest - tryGetInteger(addressStr + "_lastCheck_" + assetIdStr + "_interest")), Scale16)
-    
+    strict unstakeInv = unstakeIfNeeded(assetIdStr, rewardAmount)
+
     let transfer = if (rewardAmount == 0) then {[]} else {[ScriptTransfer(address, rewardAmount, assetId)]}
     (accum._1 ++ transfer ++ [
       IntegerEntry(addressStr + "_lastCheck_" + assetIdStr + "_interest", currentTokenInterest)
-    ], accum._2 + calculateUsdValue(assetId, rewardAmount, aBalance))
+    ], accum._2 + calculateUsdValue(assetId, rewardAmount, aBalance)) # TODO: usd calculation goes wrong if out of range
   }
   
   let accum = FOLD<10>(earnedAssets, ([], 0), handler)
@@ -761,7 +762,7 @@ func swap(assetOut: String, minimum: Int) = {
     let statsChange = IntegerEntry("global_feesEarned_"+assetIn, tryGetInteger("global_feesEarned_"+assetIn) + lpFee)
 
     # stake/unstake assets
-    strict stakeTx = stakeIfNeeded(assetIn, cleanAmountIn)
+    strict stakeTx = stakeIfNeeded(assetIn, cleanAmountIn+lpFee)
     strict unstakeTx = unstakeIfNeeded(assetOut, AmountOut)
 
     # calculate state changes
