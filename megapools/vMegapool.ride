@@ -7,7 +7,7 @@
 # verify if one token provided in init() works
 # indefinite ranges
 
-let VERSION = "PZ-2.0.21 PROD"
+let VERSION = "PZ-2.0.22 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -546,8 +546,8 @@ func deInit() = {
 }
 
 @Callable(i)
-func init(assetIdsStr: String, assetWeightsStr: String, baseTokenIdStr: String, poolDomain: String, poolOwner: String, fee: Int, vBalancesStr: String) = {
-  strict preInitInv = invoke(this, "preInit", [assetIdsStr, assetWeightsStr, baseTokenIdStr, poolDomain, poolOwner, fee], [])
+func init(assetIdsStr: String, assetWeightsStr: String, baseTokenIdStr: String, poolDomain: String, fee: Int, vBalancesStr: String) = {
+  strict preInitInv = invoke(this, "preInit", [assetIdsStr, assetWeightsStr, baseTokenIdStr, poolDomain, i.caller.toString(), fee], [])
   
   let vBalances = parstStrToIntList(vBalancesStr)
 
