@@ -7,7 +7,7 @@
 # verify if one token provided in init() works
 # indefinite ranges
 
-let VERSION = "PZ-2.0.20 PROD"
+let VERSION = "PZ-2.0.21 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -642,24 +642,24 @@ func redeemIndex(poolTokenAmount: Int) = {
   }
 }
 
-# @Callable(i)
-# func stakeIndex() = {
-#   let addressStr = i.originCaller.toString()
-#   let pmt = i.payments[0]
+@Callable(i)
+func stakeIndex() = {
+  let addressStr = i.originCaller.toString()
+  let pmt = i.payments[0]
 
-#   if (pmt.assetId.value() != tryGetBinary("global_poolToken_id")) then {throw("wrong asset attached")} else {
-#     indexStakeResult(addressStr, pmt.amount)
-#   }
-# }
+  if (pmt.assetId.value() != tryGetString("static_poolToken_idStr").fromBase58String()) then {throw("wrong asset attached")} else {
+    indexStakeResult(addressStr, pmt.amount)
+  }
+}
 
-# @Callable(i)
-# func stakeIndexFor(addressStr: String) = {
-#   let pmt = i.payments[0]
+@Callable(i)
+func stakeIndexFor(addressStr: String) = {
+  let pmt = i.payments[0]
 
-#   if (pmt.assetId.value() != tryGetBinary("global_poolToken_id")) then {throw("wrong asset attached")} else {
-#     indexStakeResult(addressStr, pmt.amount)
-#   }
-# }
+  if (pmt.assetId.value() != tryGetString("static_poolToken_idStr").fromBase58String()) then {throw("wrong asset attached")} else {
+    indexStakeResult(addressStr, pmt.amount)
+  }
+}
 
 @Callable(i)
 func unstakeIndex(indexAmount: Int) = {
