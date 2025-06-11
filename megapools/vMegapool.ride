@@ -7,7 +7,7 @@
 # verify if one token provided in init() works
 # indefinite ranges
 
-let VERSION = "PZ-2.0.22 PROD"
+let VERSION = "PZ-2.0.23 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -289,6 +289,20 @@ func handlePoolTokensAdd(PIssued: Int, payments: List[AttachedPayment], userAddr
   }
 
   FOLD<10>(assetIds, [], handleTokenChange)
+}
+
+func calcMintedWithOneToken(assetAddedIdStr: String, amount: Int) = {
+  let PSupply = getVirtualPoolTokenAmount()
+  let assetFactBalance = tryGetInteger("global_"+assetAddedIdStr+"_factBalance")
+  let PIssued = fraction(PSupply, 
+          pow((Scale8 + fraction(amount, Scale8, assetFactBalance)).toBigInt(), 8, 
+              tryGetInteger("static_"+assetAddedIdStr+"_weight").toBigInt(), 4, 8, DOWN).toInt() 
+          - Scale8,
+          Scale8)
+  ([
+        IntegerEntry("global_"+assetAddedIdStr+"_factBalance", tryGetInteger("global_"+assetAddedIdStr+"_factBalance") + amount), 
+        IntegerEntry("global_"+assetAddedIdStr+"_balance", tryGetInteger("global_"+assetAddedIdStr+"_balance") + amount)
+  ], PIssued)
 }
 
 func handlePoolTokensRedeem(PRedeemed: Int, userAddress: Address) = {
@@ -602,6 +616,24 @@ func init(assetIdsStr: String, assetWeightsStr: String, baseTokenIdStr: String, 
   }
 }
 
+
+@Callable(i)
+func generateIndexWithOneToken(debug: Boolean) = {
+  let amount = i.payments[0].amount
+  let assetId = i.payments[0].assetId
+
+  let (result, PIssuedNoMult) = calcMintedWithOneToken(assetId.getAssetString(), amount)
+  let PIssuedWithMult = fraction(PIssuedNoMult, Scale16, getKMult(), DOWN)
+  
+  if (debug) then {throw(PIssuedWithMult.toString())} else {
+    (result ++ claimResult(i.caller)._1 ++ mintIndexIfNeeded(PIssuedWithMult) ++ [
+      IntegerEntry(i.caller.toString()+"_indexStaked", tryGetInteger(i.caller.toString()+"_indexStaked") + PIssuedWithMult),
+      IntegerEntry("global_indexStaked", tryGetInteger("global_indexStaked") + PIssuedWithMult),
+      IntegerEntry("global_poolToken_amount", tryGetInteger("global_poolToken_amount") + PIssuedWithMult)
+    ], PIssuedWithMult)
+  }
+}
+
 @Callable(i)
 func generateIndex(needChange: Boolean) = {
   if (i.payments.size() != T) then {
@@ -768,7 +800,10 @@ func swap(assetOut: String, minimum: Int) = {
     throw("contract is on stop")
   }
   else if (poolsHubAddress.getBoolean("global_shutdownIn_"+assetIn).valueOrElse(false)) then {
-    throw("token trades are stopped")
+    throw("token IN trades are stopped")
+  }
+  else if (poolsHubAddress.getBoolean("global_shutdownOut_"+assetOut).valueOrElse(false)) then {
+    throw("token OUT trades are stopped")
   }
   else {
     # distribute fees
