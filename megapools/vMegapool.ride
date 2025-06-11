@@ -7,7 +7,7 @@
 # verify if one token provided in init() works
 # indefinite ranges
 
-let VERSION = "PZ-2.0.23 PROD"
+let VERSION = "PZ-2.0.24 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -616,24 +616,6 @@ func init(assetIdsStr: String, assetWeightsStr: String, baseTokenIdStr: String, 
   }
 }
 
-
-@Callable(i)
-func generateIndexWithOneToken(debug: Boolean) = {
-  let amount = i.payments[0].amount
-  let assetId = i.payments[0].assetId
-
-  let (result, PIssuedNoMult) = calcMintedWithOneToken(assetId.getAssetString(), amount)
-  let PIssuedWithMult = fraction(PIssuedNoMult, Scale16, getKMult(), DOWN)
-  
-  if (debug) then {throw(PIssuedWithMult.toString())} else {
-    (result ++ claimResult(i.caller)._1 ++ mintIndexIfNeeded(PIssuedWithMult) ++ [
-      IntegerEntry(i.caller.toString()+"_indexStaked", tryGetInteger(i.caller.toString()+"_indexStaked") + PIssuedWithMult),
-      IntegerEntry("global_indexStaked", tryGetInteger("global_indexStaked") + PIssuedWithMult),
-      IntegerEntry("global_poolToken_amount", tryGetInteger("global_poolToken_amount") + PIssuedWithMult)
-    ], PIssuedWithMult)
-  }
-}
-
 @Callable(i)
 func generateIndex(needChange: Boolean) = {
   if (i.payments.size() != T) then {
@@ -652,6 +634,44 @@ func generateIndex(needChange: Boolean) = {
         IntegerEntry("global_poolToken_amount", tryGetInteger("global_poolToken_amount") + PIssuedWithMult)
       ], PIssuedWithMult)
     }
+  }
+}
+
+@Callable(i)
+func generateIndexWithOneToken(debug: Boolean) = {
+  let amount = i.payments[0].amount
+  let assetId = i.payments[0].assetId
+  let assetIn = assetId.getAssetString()
+
+  let feeAmountIn = fraction(amount, Fee, FeeScale)
+  let cleanAmountIn = (amount - feeAmountIn)
+
+  let (result, PIssuedNoMult) = calcMintedWithOneToken(assetId.getAssetString(), cleanAmountIn)
+  let PIssuedWithMult = fraction(PIssuedNoMult, Scale16, getKMult(), DOWN)
+
+  # distributing fee
+  let protocolFee = fraction(feeAmountIn, 5, 10)
+  let lpFee = feeAmountIn - protocolFee
+  let interestChange = calcInterestChange(assetIn, lpFee)
+  let statsChange = IntegerEntry("global_feesEarned_"+assetIn, tryGetInteger("global_feesEarned_"+assetIn) + lpFee)
+
+  # stake/unstake assets
+  strict stakeTx = stakeIfNeeded(assetIn, cleanAmountIn+lpFee)
+
+  # prepare state changes
+  let volumeUsdUpdate = calculateUsdValue(assetId, cleanAmountIn, tryGetInteger("global_"+assetIn+"_balance"))
+  
+  if (debug) then {throw(PIssuedWithMult.toString())} else {
+    (result ++ claimResult(i.caller)._1 ++ mintIndexIfNeeded(PIssuedWithMult) ++ [
+      IntegerEntry(i.caller.toString()+"_indexStaked", tryGetInteger(i.caller.toString()+"_indexStaked") + PIssuedWithMult),
+      IntegerEntry("global_indexStaked", tryGetInteger("global_indexStaked") + PIssuedWithMult),
+      IntegerEntry("global_poolToken_amount", tryGetInteger("global_poolToken_amount") + PIssuedWithMult),
+
+      # update volume stats
+      IntegerEntry("global_volume_usd", tryGetInteger("global_volume_usd") + volumeUsdUpdate),
+      interestChange,
+      statsChange
+    ], PIssuedWithMult)
   }
 }
 
