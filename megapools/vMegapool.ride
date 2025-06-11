@@ -7,7 +7,7 @@
 # verify if one token provided in init() works
 # indefinite ranges
 
-let VERSION = "PZ-2.0.24 PROD"
+let VERSION = "PZ-2.0.25 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -300,9 +300,22 @@ func calcMintedWithOneToken(assetAddedIdStr: String, amount: Int) = {
           - Scale8,
           Scale8)
   ([
-        IntegerEntry("global_"+assetAddedIdStr+"_factBalance", tryGetInteger("global_"+assetAddedIdStr+"_factBalance") + amount), 
-        IntegerEntry("global_"+assetAddedIdStr+"_balance", tryGetInteger("global_"+assetAddedIdStr+"_balance") + amount)
+        IntegerEntry("global_"+assetAddedIdStr+"_factBalance", assetFactBalance + amount), 
+        IntegerEntry("global_"+assetAddedIdStr+"_balance", tryGetInteger("global_"+assetAddedIdStr+"_balance") + amount)  # OR amount * leverage
   ], PIssued)
+}
+
+func calcRedeemWithOneToken(assetOutIdStr: String, PRedeemed: Int) = {
+  let PSupply = getVirtualPoolTokenAmount()
+  let assetFactBalance = tryGetInteger("global_"+assetOutIdStr+"_factBalance")
+  let amountOut = fraction(assetFactBalance, 
+          Scale8 - pow((Scale8 - fraction(PRedeemed, Scale8, PSupply)).toBigInt(), 8, 
+              fraction(10000, 10000, tryGetInteger("static_"+assetOutIdStr+"_weight")).toBigInt(), 4, 8, DOWN).toInt(),
+          Scale8)
+  ([
+        IntegerEntry("global_"+assetOutIdStr+"_factBalance", assetFactBalance - amountOut), 
+        IntegerEntry("global_"+assetOutIdStr+"_balance", tryGetInteger("global_"+assetOutIdStr+"_balance") - amountOut) # OR amountOut * leverage
+  ], amountOut)
 }
 
 func handlePoolTokensRedeem(PRedeemed: Int, userAddress: Address) = {
