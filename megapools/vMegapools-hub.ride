@@ -3,6 +3,7 @@
 {-# SCRIPT_TYPE ACCOUNT #-}
 {-# IMPORT artifacts/mainnet.ride #-}
 
+let VERSION = "RANGEHUB-1.0.0"
 
 let shutdownAddresses = [
   "3PMKAL4cd77onkYuuU35115Wov1sLMEcFsv",
@@ -31,4 +32,17 @@ func shutdownAssetIn(assetStr: String, val: Boolean) = {
   } else {
     throw("no access")
   }
+}
+  
+
+@Callable(i)
+func shutdownAssetOut(assetStr: String, val: Boolean) = {
+  if (shutdownAddresses.indexOf(i.caller.toString()) != unit) then {
+    [
+      BooleanEntry("global_shutdownOut_"+assetStr, val)
+    ]
+  } else {
+    throw("no access")
+  }
 } 
+
