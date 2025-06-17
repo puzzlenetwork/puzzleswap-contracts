@@ -7,7 +7,7 @@
 # verify if one token provided in init() works
 # indefinite ranges
 
-let VERSION = "PZ-2.0.25 PROD"
+let VERSION = "PZ-2.0.26 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -542,22 +542,20 @@ func preInit(assetIdsStr: String, assetWeightsStr: String, baseTokenIdStr: Strin
       }
     }
 
-    if (assetWeightsSum != 10000) then {throw("sum of token weights must be equal to 10000")} else {
-      FOLD<10>([0,1,2,3,4,5,6,7,8,9], [], addTokenDataEntries) ++ [
-        StringEntry("static_tokenIds", assetIdsStr),
-        StringEntry("static_feeToken", feeAssetStr),
-        StringEntry("static_tokenWeights", assetWeightsStr),
-        IntegerEntry("static_tokensAmount", assetIdsLi.size()),
-        StringEntry("static_poolDomain", poolDomain),
-        StringEntry("static_baseTokenId", baseTokenIdStr),
-        StringEntry("static_poolOwner", poolOwner),
-        IntegerEntry("static_fee", fee),
-        IntegerEntry("static_KMult", Scale16),
-        IntegerEntry("global_indexStaked", 0),
-        IntegerEntry("global_poolToken_amount", 0),
-        IntegerEntry("global_wasPreInited", 1)
-      ]
-    }
+    FOLD<10>([0,1,2,3,4,5,6,7,8,9], [], addTokenDataEntries) ++ [
+    StringEntry("static_tokenIds", assetIdsStr),
+    StringEntry("static_feeToken", feeAssetStr),
+    StringEntry("static_tokenWeights", assetWeightsStr),
+    IntegerEntry("static_tokensAmount", assetIdsLi.size()),
+    StringEntry("static_poolDomain", poolDomain),
+    StringEntry("static_baseTokenId", baseTokenIdStr),
+    StringEntry("static_poolOwner", poolOwner),
+    IntegerEntry("static_fee", fee),
+    IntegerEntry("static_KMult", Scale16),
+    IntegerEntry("global_indexStaked", 0),
+    IntegerEntry("global_poolToken_amount", 0),
+    IntegerEntry("global_wasPreInited", 1)
+    ]
   }
 }
 
@@ -705,6 +703,11 @@ func redeemIndex(poolTokenAmount: Int) = {
       IntegerEntry("global_poolToken_amount", tryGetInteger("global_poolToken_amount") - PRedeemedWithMult)
     ] ++ burnIndexIfNeeded(poolTokenAmount)
   }
+}
+
+@Callable(i)
+func redeemIndexWithOneToken(debug: Boolean, poolTokenAmount: Int, amountOutIdStr: String) = {
+  throw(calcRedeemWithOneToken(amountOutIdStr, poolTokenAmount)._2.toString())
 }
 
 @Callable(i)
