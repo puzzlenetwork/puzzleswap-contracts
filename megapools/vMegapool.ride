@@ -7,7 +7,7 @@
 # verify if one token provided in init() works
 # indefinite ranges
 
-let VERSION = "PZ-2.0.26 PROD"
+let VERSION = "PZ-2.0.27 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -399,6 +399,23 @@ func calcInterestChange(assetIdStr: String, lpFee: Int) = {
     let totalIndex = tryGetInteger("global_indexStaked")
     let interestDelta = fraction(lpFee, Scale16, totalIndex)
     IntegerEntry("global_lastCheck_"+assetIdStr+"_interest", tryGetInteger("global_lastCheck_"+assetIdStr+"_interest") + interestDelta)
+}
+
+func updSelloffData(assetIdStr: String, amountIn: Int) = {
+  let currentPeriod = (height / 100) * 100
+  let prevPeriod = tryGetInteger("global_"+assetIdStr+"_selloffStartHeight")
+  let prevSelloff = if (currentPeriod == prevPeriod) then tryGetInteger("global_"+assetIdStr+"_selloff") else 0
+  let selloffDelta = fraction(Scale16, amountIn, tryGetInteger("global_"+assetIdStr+"_balance"))
+
+  if ((prevSelloff + selloffDelta) > tryGetInteger("static_"+assetIdStr+"_maxSelloff")) then {
+    throw("max selloff reached for this asset " + assetIdStr)
+  } else {
+    [
+      IntegerEntry("global_"+assetIdStr+"_selloff", prevSelloff + selloffDelta)
+    ] ++ if (currentPeriod == prevPeriod) then [] else [
+      IntegerEntry("global_"+assetIdStr+"_selloffStartHeight", currentPeriod)
+    ]
+  }
 }
 
 # REBALANCE: getting union of old and new assets
@@ -885,7 +902,11 @@ func swap(assetOut: String, minimum: Int) = {
         interestChange,
 
         # stats update
-        statsChange
+        statsChange,
+
+        # selloff update, CAN THROW ERROR
+        updSelloffData(assetIn, cleanAmountIn),
+        updSelloffData(assetOut, AmountOut)
       ], 
       AmountOut
     )
