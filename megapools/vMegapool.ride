@@ -7,7 +7,7 @@
 # verify if one token provided in init() works
 # indefinite ranges
 
-let VERSION = "PZ-2.0.28 PROD"
+let VERSION = "PZ-2.0.29 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -21,6 +21,7 @@ let CONFIG_ADDRESS = if (configStr == "") then {
 let AssetsWeightsDecimals = 4
 let Scale = 10000
 let Scale8 = 100000000
+let Scale12 = 1000000000000
 let Scale16 = 10000000000000000
 let FeeScale = 10000
 let PoolTokenDecimals = 8
@@ -535,10 +536,11 @@ func addUnderlyingStaker(stakerAddress: String, assetIdStr: String) = {
 }
 
 @Callable(i)
-func preInit(assetIdsStr: String, assetWeightsStr: String, baseTokenIdStr: String, poolDomain: String, poolOwner: String, fee: Int) = {
+func preInit(assetIdsStr: String, assetWeightsStr: String, assetMaxSelloffStr: String, baseTokenIdStr: String, poolDomain: String, poolOwner: String, fee: Int) = {
   let poolOwnerAddress = Address(poolOwner.fromBase58String())
 
-  let assetIdsStrLi = assetIdsStr.split(",")    
+  let assetIdsStrLi = assetIdsStr.split(",") 
+  let assetMaxSelloffStrLi = assetMaxSelloffStr.split(",")
   let assetIdsLi = FOLD<10>(assetIdsStrLi, [], addAssetBytesToList)
   let feeAssetStr = FOLD<10>(assetIdsStrLi, "", checkFeeAsset)
 
@@ -563,7 +565,8 @@ func preInit(assetIdsStr: String, assetWeightsStr: String, baseTokenIdStr: Strin
         accum ++ [
           IntegerEntry("static_"+assetIdsStrLi[assetNum]+"_scale", pow(10, 0, assetDecimals, 0, 0, DOWN)),
           IntegerEntry("static_"+assetIdsStrLi[assetNum]+"_decimals", assetDecimals),
-          IntegerEntry("static_"+assetIdsStrLi[assetNum]+"_weight", assetWeightsStrLi[assetNum].parseInt().value())
+          IntegerEntry("static_"+assetIdsStrLi[assetNum]+"_weight", assetWeightsStrLi[assetNum].parseInt().value()),
+          IntegerEntry("static_"+assetIdsStrLi[assetNum]+"_maxSelloff", assetMaxSelloffStrLi[assetNum].parseIntValue()*Scale12)
         ]
       }
     }
@@ -597,8 +600,8 @@ func deInit() = {
 }
 
 @Callable(i)
-func init(assetIdsStr: String, assetWeightsStr: String, baseTokenIdStr: String, poolDomain: String, fee: Int, vBalancesStr: String) = {
-  strict preInitInv = invoke(this, "preInit", [assetIdsStr, assetWeightsStr, baseTokenIdStr, poolDomain, i.caller.toString(), fee], [])
+func init(assetIdsStr: String, assetWeightsStr: String, assetMaxSelloffStr: String, baseTokenIdStr: String, poolDomain: String, fee: Int, vBalancesStr: String) = {
+  strict preInitInv = invoke(this, "preInit", [assetIdsStr, assetWeightsStr, assetMaxSelloffStr, baseTokenIdStr, poolDomain, i.caller.toString(), fee], [])
   
   let vBalances = parstStrToIntList(vBalancesStr)
 
