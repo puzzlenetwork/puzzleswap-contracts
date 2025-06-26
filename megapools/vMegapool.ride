@@ -7,7 +7,7 @@
 # verify if one token provided in init() works
 # indefinite ranges
 
-let VERSION = "PZ-2.0.27 PROD"
+let VERSION = "PZ-2.0.28 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -271,20 +271,23 @@ func handlePoolTokensAdd(PIssued: Int, payments: List[AttachedPayment], userAddr
   }
 
   func handleTokenChange(accum: List[IntegerEntry|ScriptTransfer], tokenId: ByteVector|Unit) = {
+    let assetIdStr = tokenId.getAssetString()
     let paymentAmount = getTokenPaymentAmount(tokenId)
-    let Bk = getFactBalance(tokenId.getAssetString())
+    let Bk = getFactBalance(assetIdStr)
     let PSupply = getVirtualPoolTokenAmount()
-    let tokenDecimals = tryGetInteger("static_"+tokenId.getAssetString()+"_scale")
+    let tokenDecimals = tryGetInteger("static_"+assetIdStr+"_scale")
     let a1 = fraction((PSupply + PIssued).toBigInt()*Scale8.toBigInt(), tokenDecimals.toBigInt(), PSupply.toBigInt(), CEILING)
     let Dk = fraction(a1 - tokenDecimals.toBigInt()*Scale8.toBigInt(), Bk.toBigInt(), tokenDecimals.toBigInt()*Scale8.toBigInt(), CEILING).toInt()  # deposited amount of token K
 
     let toReturn = paymentAmount - Dk
-    strict stakeTx = stakeIfNeeded(tokenId.getAssetString(), Dk)
+    strict stakeTx = stakeIfNeeded(assetIdStr, Dk)
 
     let t = if (needChange && toReturn > 0) then {[ScriptTransfer(userAddress, toReturn, tokenId)]} else {[]}
     accum ++ t ++ [
-        IntegerEntry("global_"+tokenId.getAssetString()+"_factBalance", tryGetInteger("global_"+tokenId.getAssetString()+"_factBalance") + Dk), 
-        IntegerEntry("global_"+tokenId.getAssetString()+"_balance", fraction(tryGetInteger("global_"+tokenId.getAssetString()+"_balance"), PSupply+PIssued, PSupply))
+        IntegerEntry("global_"+assetIdStr+"_factBalance", tryGetInteger("global_"+assetIdStr+"_factBalance") + Dk), 
+        IntegerEntry("global_"+assetIdStr+"_balance", fraction(tryGetInteger("global_"+assetIdStr+"_balance"), PSupply+PIssued, PSupply))
+    ] ++ if (tryGetInteger("global_"+assetIdStr+"_selloffStartHeight") != height / 100 * 100) then [] else [
+        IntegerEntry("global_"+assetIdStr+"_selloffStartBalance", fraction(tryGetInteger("global_"+assetIdStr+"_selloffStartBalance"), PSupply+PIssued, PSupply))
     ]
   }
 
@@ -320,20 +323,23 @@ func calcRedeemWithOneToken(assetOutIdStr: String, PRedeemed: Int) = {
 
 func handlePoolTokensRedeem(PRedeemed: Int, userAddress: Address) = {
   func handleTokenRedeem(accum: List[IntegerEntry|ScriptTransfer], tokenId: ByteVector|Unit) = {
-    let Bk = getFactBalance(tokenId.getAssetString())
+    let assetIdStr = tokenId.getAssetString()
+    let Bk = getFactBalance(assetIdStr)
     let PSupply = getVirtualPoolTokenAmount()
-    let tokenDecimals = tryGetInteger("static_"+tokenId.getAssetString()+"_scale")
+    let tokenDecimals = tryGetInteger("static_"+assetIdStr+"_scale")
 
     let psuppl = fraction(((PSupply - PRedeemed).toBigInt()*Scale8.toBigInt()), Scale8.toBigInt(), PSupply.toBigInt(), DOWN)
     let amount = fraction(
       (Scale16.toBigInt() - psuppl), Bk.toBigInt(), Scale16.toBigInt(), CEILING).toInt()
 
-    strict unstakeTx = unstakeIfNeeded(tokenId.getAssetString(), amount)
+    strict unstakeTx = unstakeIfNeeded(assetIdStr, amount)
 
     accum ++ [
-        IntegerEntry("global_"+tokenId.getAssetString()+"_factBalance", tryGetInteger("global_"+tokenId.getAssetString()+"_factBalance") - amount),
-        IntegerEntry("global_"+tokenId.getAssetString()+"_balance", fraction(tryGetInteger("global_"+tokenId.getAssetString()+"_balance"), PSupply-PRedeemed, PSupply)),
+        IntegerEntry("global_"+assetIdStr+"_factBalance", tryGetInteger("global_"+assetIdStr+"_factBalance") - amount),
+        IntegerEntry("global_"+assetIdStr+"_balance", fraction(tryGetInteger("global_"+assetIdStr+"_balance"), PSupply-PRedeemed, PSupply)),
         ScriptTransfer(userAddress, amount, tokenId)
+    ] ++ if (tryGetInteger("global_"+assetIdStr+"_selloffStartHeight") != height / 100 * 100) then [] else [
+        IntegerEntry("global_"+assetIdStr+"_selloffStartBalance", fraction(tryGetInteger("global_"+assetIdStr+"_selloffStartBalance"), PSupply-PRedeemed, PSupply))
     ]
   }
 
@@ -405,7 +411,8 @@ func updSelloffData(assetIdStr: String, amountIn: Int) = {
   let currentPeriod = (height / 100) * 100
   let prevPeriod = tryGetInteger("global_"+assetIdStr+"_selloffStartHeight")
   let prevSelloff = if (currentPeriod == prevPeriod) then tryGetInteger("global_"+assetIdStr+"_selloff") else 0
-  let selloffDelta = fraction(Scale16, amountIn, tryGetInteger("global_"+assetIdStr+"_balance"))
+  let selloffStartBalance = if (currentPeriod == prevPeriod) then tryGetInteger("global_"+assetIdStr+"_selloffStartBalance") else tryGetInteger("global_"+assetIdStr+"_balance")
+  let selloffDelta = fraction(Scale16, amountIn, selloffStartBalance)
 
   if ((prevSelloff + selloffDelta) > tryGetInteger("static_"+assetIdStr+"_maxSelloff")) then {
     throw("max selloff reached for this asset " + assetIdStr)
@@ -413,10 +420,12 @@ func updSelloffData(assetIdStr: String, amountIn: Int) = {
     [
       IntegerEntry("global_"+assetIdStr+"_selloff", prevSelloff + selloffDelta)
     ] ++ if (currentPeriod == prevPeriod) then [] else [
-      IntegerEntry("global_"+assetIdStr+"_selloffStartHeight", currentPeriod)
+      IntegerEntry("global_"+assetIdStr+"_selloffStartHeight", currentPeriod),
+      IntegerEntry("global_"+assetIdStr+"_selloffStartBalance", selloffStartBalance)
     ]
   }
 }
+
 
 # REBALANCE: getting union of old and new assets
 func getTmpRebalanceIds(newAssetIdsLi: List[String]) = {
