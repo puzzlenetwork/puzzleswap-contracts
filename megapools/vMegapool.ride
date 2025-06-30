@@ -7,7 +7,7 @@
 # verify if one token provided in init() works
 # indefinite ranges
 
-let VERSION = "PZ-2.1.0 PROD"
+let VERSION = "PZ-2.2.0 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -415,7 +415,8 @@ func updSelloffData(assetIdStr: String, amountIn: Int) = {
   let selloffStartBalance = if (currentPeriod == prevPeriod) then tryGetInteger("global_"+assetIdStr+"_selloffStartBalance") else tryGetInteger("global_"+assetIdStr+"_balance")
   let selloffDelta = fraction(Scale16, amountIn, selloffStartBalance)
 
-  if ((prevSelloff + selloffDelta) > tryGetInteger("static_"+assetIdStr+"_maxSelloff")) then {
+  let maxSelloff = tryGetInteger("static_"+assetIdStr+"_maxSelloff")
+  if ((prevSelloff + selloffDelta) > maxSelloff && maxSelloff != 0) then {
     throw("max selloff reached for this asset " + assetIdStr)
   } else {
     [
@@ -565,7 +566,8 @@ func preInit(assetIdsStr: String, assetWeightsStr: String, assetMaxSelloffStr: S
         accum ++ [
           IntegerEntry("static_"+assetIdsStrLi[assetNum]+"_scale", pow(10, 0, assetDecimals, 0, 0, DOWN)),
           IntegerEntry("static_"+assetIdsStrLi[assetNum]+"_decimals", assetDecimals),
-          IntegerEntry("static_"+assetIdsStrLi[assetNum]+"_weight", assetWeightsStrLi[assetNum].parseInt().value()),
+          IntegerEntry("static_"+assetIdsStrLi[assetNum]+"_weight", assetWeightsStrLi[assetNum].parseInt().value())
+        ] ++ if (assetMaxSelloffStrLi[assetNum] == "") then {[]} else [
           IntegerEntry("static_"+assetIdsStrLi[assetNum]+"_maxSelloff", assetMaxSelloffStrLi[assetNum].parseIntValue()*Scale12)
         ]
       }
