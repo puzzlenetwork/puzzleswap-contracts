@@ -5,7 +5,7 @@
 
 
 
-let VERSION = "RRS-0.2.0"
+let VERSION = "RRS-0.2.1"
 
 
 func tryGetInteger(key: String) = {
@@ -100,7 +100,7 @@ func payoutRewards() = {
   else {
     
     # calc rewards
-    strict rewardAmount = tryGetInteger("global_stakedAmount_"+romeIdStr) - getBalance(romeIdStr)
+    strict rewardAmount = getBalance(romeIdStr) - tryGetInteger("global_stakedAmount_"+romeIdStr)
 
     # distributing rewards
     let toDistribute = rewardAmount / DistributeIterations
