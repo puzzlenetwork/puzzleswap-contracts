@@ -7,7 +7,7 @@
 # verify if one token provided in init() works
 # indefinite ranges
 
-let VERSION = "PZ-2.4.0 PROD"
+let VERSION = "PZ-2.5.0 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -519,9 +519,19 @@ func getP1P2(assetIdStr: String, baseAssetIdStr: String) = {
     let F2 = getFactBalance(assetIdStr)
     let S1 = tryGetInteger("static_"+baseAssetIdStr+"_scale")
     let S2 = tryGetInteger("static_"+assetIdStr+"_scale")
+    let D1 = tryGetInteger("static_"+baseAssetIdStr+"_decimals")
+    let D2 = tryGetInteger("static_"+assetIdStr+"_decimals")
+    let W1 = tryGetInteger("static_"+baseAssetIdStr+"_weight")
+    let W2 = tryGetInteger("static_"+assetIdStr+"_weight")
 
-    let p1 = fraction((B1 - F1), (B1 - F1), fraction(B1, B2, S2) )
-    let p2 = fraction( B1, B2, fraction((B2 - F2), (B2 - F2), S2) )
+    let B2_powered = pow(B2.toBigInt(), D2, fraction(W2, 10000, W1).toBigInt(), 4, D2, CEILING).toInt()
+    let p1 = pow(
+      fraction((B1 - F1), (B1 - F1), fraction(B1, B2_powered, S2) ).toBigInt(), D1,
+      fraction(W1, 10000, W2).toBigInt(), 4, D1, CEILING).toInt()
+
+    let B1_powered = pow(B1.toBigInt(), D1, fraction(W1, 10000, W2).toBigInt(), 4, D1, CEILING).toInt()
+    let p2 = pow(fraction( B1_powered, B2, fraction((B2 - F2), (B2 - F2), S2) ).toBigInt(), D1,
+      fraction(W2, 10000, W1).toBigInt(), 4, D1, DOWN).toInt()
 
     (p1, p2)
 }
