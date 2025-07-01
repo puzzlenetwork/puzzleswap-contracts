@@ -7,7 +7,7 @@
 # verify if one token provided in init() works
 # indefinite ranges
 
-let VERSION = "PZ-2.5.0 PROD"
+let VERSION = "PZ-2.6.0 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -976,7 +976,7 @@ func swap(assetOut: String, minimum: Int) = {
         # selloff update, CAN THROW ERROR
         updSelloffData(assetIn, cleanAmountIn)
         ++
-        updSelloffData(assetOut, AmountOut)
+        updSelloffData(assetOut, -AmountOut)
 
       , AmountOut
     )
