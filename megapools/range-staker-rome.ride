@@ -5,7 +5,7 @@
 
 
 
-let VERSION = "RRS-0.2.1"
+let VERSION = "RRS-0.2.2"
 
 
 func tryGetInteger(key: String) = {
@@ -104,7 +104,7 @@ func payoutRewards() = {
 
     # distributing rewards
     let toDistribute = rewardAmount / DistributeIterations
-    strict inv = invoke(parent, "addInterestExternal", [], [AttachedPayment(romeId, toDistribute)])
+    strict inv = invoke(parent, "notifyStakingPayment", [romeIdStr, toDistribute], [])
 
     [
       IntegerEntry("stats_lastDistribution_"+romeIdStr, height),
