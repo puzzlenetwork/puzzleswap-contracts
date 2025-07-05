@@ -3,7 +3,7 @@
 {-# SCRIPT_TYPE ACCOUNT #-}
 {-# IMPORT artifacts/mainnet.ride #-}
 
-let VERSION = "RANGEHUB-2.0.0"
+let VERSION = "RANGEHUB-2.1.0"
 
 let shutdownAddresses = [
   "3PMKAL4cd77onkYuuU35115Wov1sLMEcFsv",
@@ -21,7 +21,7 @@ func remove(li: List[String], val: String) = {
 
 func getEntryKey(type: String) = {
     if type == "range" then "global_emptyPools"
-    else if type == "romestaker" then "global_emptyRomeStakers"
+    else if type == "staker_AP4Cb5xLYGH6ZigHreCZHoXpQTWDkPsG2BHqfDUx6taJ" then "global_emptyStakers_AP4Cb5xLYGH6ZigHreCZHoXpQTWDkPsG2BHqfDUx6taJ"
     else throw("wrong type")
 }
 
@@ -45,9 +45,9 @@ func addEmptyContract(address: String, type: String) = {
 func useEmptyContract(type: String) = {
   let entryKey = getEntryKey(type)
   let contractsLi = getString(entryKey).valueOrElse("").split_4C(",").value()
-  let emptyContract = contractsLi[0].value()
+  let emptyContract = contractsLi[0].valueOrElse("")
 
-  let newContactsLi = contractsLi.remove(emptyContract)
+  let newContactsLi = if (emptyContract == "") then {contractsLi} else {contractsLi.remove(emptyContract)}
 
   ([
       StringEntry(entryKey, newContactsLi.makeString(","))
