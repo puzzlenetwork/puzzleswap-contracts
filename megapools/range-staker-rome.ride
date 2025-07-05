@@ -5,7 +5,7 @@
 
 
 
-let VERSION = "RRS-0.2.2"
+let VERSION = "RRS-0.2.3"
 
 
 func tryGetInteger(key: String) = {
@@ -108,7 +108,8 @@ func payoutRewards() = {
 
     [
       IntegerEntry("stats_lastDistribution_"+romeIdStr, height),
-      IntegerEntry("stats_totalDistributed_"+romeIdStr, getInteger("stats_totalDistributed_"+romeIdStr).valueOrElse(0) + toDistribute)
+      IntegerEntry("stats_totalDistributed_"+romeIdStr, getInteger("stats_totalDistributed_"+romeIdStr).valueOrElse(0) + toDistribute),
+      IntegerEntry("global_stakedAmount_"+romeIdStr, tryGetInteger("global_stakedAmount_"+romeIdStr) + toDistribute)
     ]
     
   }
