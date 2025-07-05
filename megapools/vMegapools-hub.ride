@@ -3,19 +3,65 @@
 {-# SCRIPT_TYPE ACCOUNT #-}
 {-# IMPORT artifacts/mainnet.ride #-}
 
-let VERSION = "RANGEHUB-1.0.0"
+let VERSION = "RANGEHUB-2.0.0"
 
 let shutdownAddresses = [
   "3PMKAL4cd77onkYuuU35115Wov1sLMEcFsv",
   "3P9xX849YJXg7C87v82cDyDy5VhKiPJpHo8"
 ]
 
+## INTERNAL FUNCTIONS
+
+func remove(li: List[String], val: String) = {
+  func handler(accum: List[String], next: String) = {
+    if (next == val) then {accum} else {accum ++ [next]}
+  }
+  FOLD<100>(li, [], handler)
+}
+
+func getEntryKey(type: String) = {
+    if type == "range" then "global_emptyPools"
+    else if type == "romestaker" then "global_emptyRomeStakers"
+    else throw("wrong type")
+}
+
+## CALLABLES
+
+@Callable(i)
+func addEmptyContract(address: String, type: String) = {
+  let entryKey = getEntryKey(type)
+
+  if (i.caller == this) then {
+    [
+      StringEntry(entryKey, getString(entryKey).valueOrElse("") + address + ",")
+    ]
+  } else {
+    throw("no access")
+  }
+}
+
+
+@Callable(i)
+func useEmptyContract(type: String) = {
+  let entryKey = getEntryKey(type)
+  let contractsLi = getString(entryKey).valueOrElse("").split_4C(",").value()
+  let emptyContract = contractsLi[0].value()
+
+  let newContactsLi = contractsLi.remove(emptyContract)
+
+  ([
+      StringEntry(entryKey, newContactsLi.makeString(","))
+    ], emptyContract
+  )
+}
+
 
 @Callable(i)
 func addPool(address: String) = {
-  if (i.caller == this) then {
+  if (i.caller == this) then { # || or smart contract allowed
     [
-      StringEntry("global_pools", getString("global_pools").valueOrElse("") + address + ",")
+      StringEntry("global_pools", getString("global_pools").valueOrElse("") + address + ","),
+      StringEntry("global_emptyPools", getString("global_emptyPools").valueOrElse("").split_4C(",").remove(address).makeString(","))
     ]
   } else {
     throw("no access")
