@@ -6,7 +6,7 @@
 # TODO
 # indefinite ranges
 
-let VERSION = "PZ-2.9.0 PROD"
+let VERSION = "PZ-2.10.0 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -879,6 +879,20 @@ func addInterestExternal() = {
     strict stakeTx = stakeIfNeeded(assetIdStr, amount)
 
     if (assetIds.indexOf(assetId) == unit) then {throw("you can only add interest for assets in the pool")}
+    else {
+        [
+            calcInterestChange(assetIdStr, amount),
+            IntegerEntry("global_extraEarned_"+assetIdStr, tryGetInteger("global_extraEarned_"+assetIdStr) + amount)
+        ]
+    }
+}
+
+@Callable(i)
+func notifyStakingPayment(assetIdStr: String, amount: Int) = {
+    let assetId = assetIdStr.getAssetBytes()
+
+    if (assetIds.indexOf(assetId) == unit) then {throw("you can only add interest for assets in the pool")}
+    else if (tryGetString("static_stakingContract_"+assetIdStr) != i.caller.toString()) then {throw("can only be invoked by staker contract")}
     else {
         [
             calcInterestChange(assetIdStr, amount),
