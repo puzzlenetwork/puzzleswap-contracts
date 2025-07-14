@@ -6,7 +6,7 @@
 # TODO
 # indefinite ranges
 
-let VERSION = "PZ-2.10.0 PROD"
+let VERSION = "PZ-2.12.0 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -178,16 +178,22 @@ func unstakeIfNeeded(assetIdStr: String, amount: Int) = {
 
 func burnIndexIfNeeded(amount: Int) = {
   let indexIdStr = tryGetString("static_poolToken_idStr")
-  if (indexIdStr == "") then {[]} else {[
-    Burn(indexIdStr.fromBase58String(), amount)
-  ]}
+  if (indexIdStr == "") then {[]} else {
+    if (assetInfo(indexIdStr.fromBase58String()) == unit) then {[]} 
+    else {[
+      Burn(indexIdStr.fromBase58String(), amount)
+    ]}
+  }
 }
 
 func mintIndexIfNeeded(amount: Int) = {
   let indexIdStr = tryGetString("static_poolToken_idStr")
-  if (indexIdStr == "") then {[]} else {[
-    Reissue(indexIdStr.fromBase58String(), amount, true)
-  ]}
+  if (indexIdStr == "") then {[]} else {
+    if (assetInfo(indexIdStr.fromBase58String()) == unit) then {[]} 
+    else {[
+      Reissue(indexIdStr.fromBase58String(), amount, true)
+    ]}
+  }
 }
 
 func getKMult() = {
@@ -250,6 +256,18 @@ func calculateUsdValue(assetId: ByteVector|Unit, amount: Int, aBalance: Int) = {
 
 }
 
+func calcAvgConcentration() = {
+    func f(accum: (Int, Int), next: ByteVector|Unit) = {
+        let assetIdStr = next.getAssetString()
+        let weight = tryGetInteger("static_"+assetIdStr+"_weight")
+        let assetFactBalance = tryGetInteger("global_"+assetIdStr+"_factBalance")
+        let assetVirtBalance = tryGetInteger("global_"+assetIdStr+"_balance")
+
+        (accum._1 + fraction(assetFactBalance, weight, assetVirtBalance), accum._2+weight)
+    }
+    FOLD<10>(assetIds, (0, 0), f)
+}
+
 func checkTokensValidity(payments: List[AttachedPayment]) = {
   func handler1(accum: List[ByteVector], payment: AttachedPayment) = {
     accum ++ [payment.assetId]
@@ -297,30 +315,40 @@ func handlePoolTokensAdd(PIssued: Int, payments: List[AttachedPayment], userAddr
 func calcMintedWithOneToken(assetAddedIdStr: String, amount: Int) = {
   let PSupply = getVirtualPoolTokenAmount()
   let assetFactBalance = tryGetInteger("global_"+assetAddedIdStr+"_factBalance")
-  let PIssued = fraction(PSupply, 
-          pow((Scale8 + fraction(amount, Scale8, assetFactBalance)).toBigInt(), 8, 
-              tryGetInteger("static_"+assetAddedIdStr+"_weight").toBigInt(), 4, 8, DOWN).toInt() 
+  let assetVirtBalance = tryGetInteger("global_"+assetAddedIdStr+"_balance")
+  let assetWeight = tryGetInteger("static_"+assetAddedIdStr+"_weight")
+  let PIssuedNoMultiplier = fraction(PSupply, 
+          pow((Scale8 + fraction(amount, Scale8, assetVirtBalance)).toBigInt(), 8, 
+              assetWeight.toBigInt(), 4, 8, DOWN).toInt() 
           - Scale8,
           Scale8)
+
+  let avgConc = calcAvgConcentration()
+  let PIssued = fraction(PIssuedNoMultiplier, avgConc._2, avgConc._1)
+
   ([
         IntegerEntry("global_"+assetAddedIdStr+"_factBalance", assetFactBalance + amount), 
-        IntegerEntry("global_"+assetAddedIdStr+"_balance", fraction(tryGetInteger("global_"+assetAddedIdStr+"_balance") + amount, PSupply+PIssued, PSupply))  # OR amount * leverage
+        IntegerEntry("global_"+assetAddedIdStr+"_balance", fraction(assetVirtBalance, PSupply+PIssued, PSupply))  # OR amount * leverage
   ], PIssued)
 }
 
 func calcRedeemWithOneToken(assetOutIdStr: String, PRedeemed: Int) = {
   let PSupply = getVirtualPoolTokenAmount()
   let assetFactBalance = tryGetInteger("global_"+assetOutIdStr+"_factBalance")
-  let amountOut = fraction(assetFactBalance, 
+  let assetVirtBalance = tryGetInteger("global_"+assetOutIdStr+"_balance")
+  let amountOutNoMulitplier = fraction(assetVirtBalance, 
           Scale8 - pow((Scale8 - fraction(PRedeemed, Scale8, PSupply)).toBigInt(), 8, 
               fraction(10000, 10000, tryGetInteger("static_"+assetOutIdStr+"_weight")).toBigInt(), 4, 8, DOWN).toInt(),
           Scale8)
+
+  let avgConc = calcAvgConcentration()
+  let amountOut = fraction(amountOutNoMulitplier, avgConc._1, avgConc._2)
   
   if (assetFactBalance < amountOut) then {throw("no available fact liquidity to withdraw in one token")}
   else {
     ([
           IntegerEntry("global_"+assetOutIdStr+"_factBalance", assetFactBalance - amountOut), 
-          IntegerEntry("global_"+assetOutIdStr+"_balance", fraction(tryGetInteger("global_"+assetOutIdStr+"_balance") - amountOut, PSupply-PRedeemed, PSupply))
+          IntegerEntry("global_"+assetOutIdStr+"_balance", fraction(assetVirtBalance, PSupply-PRedeemed, PSupply))
     ], amountOut)
   }
 }
