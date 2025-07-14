@@ -6,7 +6,7 @@
 # TODO
 # indefinite ranges
 
-let VERSION = "PZ-3.0.0 PROD"
+let VERSION = "PZ-3.2.0 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -317,8 +317,11 @@ func calcMintedWithOneToken(assetAddedIdStr: String, amount: Int) = {
   let assetFactBalance = tryGetInteger("global_"+assetAddedIdStr+"_factBalance")
   let assetVirtBalance = tryGetInteger("global_"+assetAddedIdStr+"_balance")
   let assetWeight = tryGetInteger("static_"+assetAddedIdStr+"_weight")
+  let assetScale = tryGetInteger("static_"+assetAddedIdStr+"_scale")
+  let assetDecimals = tryGetInteger("static_"+assetAddedIdStr+"_decimals")
+
   let PIssuedNoMultiplier = fraction(PSupply, 
-          pow((Scale8 + fraction(amount, Scale8, assetVirtBalance)).toBigInt(), 8, 
+          pow((assetScale + fraction(amount, assetScale, assetVirtBalance)).toBigInt(), assetDecimals, 
               assetWeight.toBigInt(), 4, 8, DOWN).toInt() 
           - Scale8,
           Scale8)
@@ -328,7 +331,7 @@ func calcMintedWithOneToken(assetAddedIdStr: String, amount: Int) = {
 
   ([
         IntegerEntry("global_"+assetAddedIdStr+"_factBalance", assetFactBalance + amount), 
-        IntegerEntry("global_"+assetAddedIdStr+"_balance", assetVirtBalance + amount) # fraction(assetVirtBalance, PSupply+PIssued, PSupply))  # OR amount * leverage
+        IntegerEntry("global_"+assetAddedIdStr+"_balance", assetVirtBalance + amount) # fraction(avgConc._2, amount, avgConc._1)) # fraction(assetVirtBalance, PSupply+PIssued, PSupply))  # OR amount * leverage
   ], PIssued)
 }
 
@@ -336,9 +339,13 @@ func calcRedeemWithOneToken(assetOutIdStr: String, PRedeemed: Int) = {
   let PSupply = getVirtualPoolTokenAmount()
   let assetFactBalance = tryGetInteger("global_"+assetOutIdStr+"_factBalance")
   let assetVirtBalance = tryGetInteger("global_"+assetOutIdStr+"_balance")
+  let assetWeight = tryGetInteger("static_"+assetOutIdStr+"_weight")
+  let assetScale = tryGetInteger("static_"+assetOutIdStr+"_scale")
+  let assetDecimals = tryGetInteger("static_"+assetOutIdStr+"_decimals")
+
   let amountOutNoMulitplier = fraction(assetVirtBalance, 
-          Scale8 - pow((Scale8 - fraction(PRedeemed, Scale8, PSupply)).toBigInt(), 8, 
-              fraction(10000, 10000, tryGetInteger("static_"+assetOutIdStr+"_weight")).toBigInt(), 4, 8, DOWN).toInt(),
+          Scale8 - pow((assetScale - fraction(PRedeemed, assetScale, PSupply)).toBigInt(), assetDecimals, 
+              fraction(10000, 10000, assetWeight).toBigInt(), 4, 8, DOWN).toInt(),
           Scale8)
 
   let avgConc = calcAvgConcentration()
@@ -348,7 +355,7 @@ func calcRedeemWithOneToken(assetOutIdStr: String, PRedeemed: Int) = {
   else {
     ([
           IntegerEntry("global_"+assetOutIdStr+"_factBalance", assetFactBalance - amountOut), 
-          IntegerEntry("global_"+assetOutIdStr+"_balance", assetVirtBalance - amountOut) # fraction(assetVirtBalance, PSupply-PRedeemed, PSupply))
+          IntegerEntry("global_"+assetOutIdStr+"_balance", assetVirtBalance - amountOut) # fraction(avgConc._2, amountOut, avgConc._1)) # fraction(assetVirtBalance, PSupply-PRedeemed, PSupply))
     ], amountOut)
   }
 }
@@ -753,7 +760,7 @@ func generateIndexWithOneToken(debug: Boolean) = {
   # prepare state changes
   let volumeUsdUpdate = calculateUsdValue(assetId, cleanAmountIn, tryGetInteger("global_"+assetIn+"_balance"))
   
-  if (true) then {throw(PIssuedWithMult.toString())} else {
+  if (debug) then {throw(PIssuedWithMult.toString())} else {
     (result ++ claimResult(i.caller)._1 ++ mintIndexIfNeeded(PIssuedWithMult) ++ [
       IntegerEntry(i.caller.toString()+"_indexStaked", tryGetInteger(i.caller.toString()+"_indexStaked") + PIssuedWithMult),
       IntegerEntry("global_indexStaked", tryGetInteger("global_indexStaked") + PIssuedWithMult),
@@ -814,7 +821,7 @@ func redeemIndexWithOneToken(debug: Boolean, poolTokenAmount: Int, assetOutIdStr
     # prepare state changes
     let volumeUsdUpdate = calculateUsdValue(assetOutIdStr.getAssetBytes(), cleanAmountOut, tryGetInteger("global_"+assetOutIdStr+"_balance"))
 
-    if (true) then {throw(cleanAmountOut.toString())} else {
+    if (debug) then {throw(cleanAmountOut.toString())} else {
       result ++ claimResult(i.caller)._1 ++ [
         ScriptTransfer(i.caller, cleanAmountOut, assetOutIdStr.getAssetBytes()),
 
@@ -1101,5 +1108,5 @@ func setFee(newFee: Int) = {
   }
 }
 
-@Verifier(tx)
-func verify() = sigVerify(tx.bodyBytes, tx.proofs[0], masterPubKey)
+# @Verifier(tx)
+# func verify() = sigVerify(tx.bodyBytes, tx.proofs[0], masterPubKey)
