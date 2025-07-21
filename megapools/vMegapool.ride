@@ -5,7 +5,7 @@
 # TODO
 # indefinite ranges
 
-let VERSION = "PZ-3.3.0 PROD"
+let VERSION = "PZ-3.4.0 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -223,9 +223,11 @@ func calculatePIssued(amount: Int, tokenId: ByteVector|Unit) = {
 
 func getMinPIssued(payments: List[AttachedPayment]) = {
   func handler(accum: Int, current: AttachedPayment) = {
-    let PIssued = calculatePIssued(current.amount, current.assetId)
-    if (PIssued == 0) then {throw("one of the tokens amounts is too low")}
-    else if ((accum == 0) || (PIssued < accum)) then {PIssued} else {accum}
+    if (getFactBalance(current.assetId.getAssetString()) == 0) then {accum} else {
+      let PIssued = calculatePIssued(current.amount, current.assetId)
+      if (PIssued == 0) then {throw("one of the tokens amounts is too low")}
+      else if ((accum == 0) || (PIssued < accum)) then {PIssued} else {accum}
+    }
   }
   let minPIssed = FOLD<10>(payments, 0, handler)
   minPIssed
