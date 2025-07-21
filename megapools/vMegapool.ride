@@ -1,12 +1,11 @@
 {-# STDLIB_VERSION 6 #-}
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
-{-# IMPORT artifacts/mainnet.ride #-}
 
 # TODO
 # indefinite ranges
 
-let VERSION = "PZ-3.2.0 PROD"
+let VERSION = "PZ-3.3.0 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -736,44 +735,44 @@ func generateIndex(needChange: Boolean) = {
   }
 }
 
-@Callable(i)
-func generateIndexWithOneToken(debug: Boolean) = {
-  let amount = i.payments[0].amount
-  let assetId = i.payments[0].assetId
-  let assetIn = assetId.getAssetString()
+# @Callable(i)
+# func generateIndexWithOneToken(debug: Boolean) = {
+#   let amount = i.payments[0].amount
+#   let assetId = i.payments[0].assetId
+#   let assetIn = assetId.getAssetString()
 
-  let feeAmountIn = fraction(amount, Fee, FeeScale)
-  let cleanAmountIn = (amount - feeAmountIn)
+#   let feeAmountIn = fraction(amount, Fee, FeeScale)
+#   let cleanAmountIn = (amount - feeAmountIn)
 
-  let (result, PIssuedNoMult) = calcMintedWithOneToken(assetId.getAssetString(), cleanAmountIn)
-  let PIssuedWithMult = fraction(PIssuedNoMult, Scale16, getKMult(), DOWN)
+#   let (result, PIssuedNoMult) = calcMintedWithOneToken(assetId.getAssetString(), cleanAmountIn)
+#   let PIssuedWithMult = fraction(PIssuedNoMult, Scale16, getKMult(), DOWN)
 
-  # distributing fee
-  let protocolFee = fraction(feeAmountIn, 5, 10)
-  let lpFee = feeAmountIn - protocolFee
-  let interestChange = calcInterestChange(assetIn, lpFee)
-  let statsChange = IntegerEntry("global_feesEarned_"+assetIn, tryGetInteger("global_feesEarned_"+assetIn) + lpFee)
+#   # distributing fee
+#   let protocolFee = fraction(feeAmountIn, 5, 10)
+#   let lpFee = feeAmountIn - protocolFee
+#   let interestChange = calcInterestChange(assetIn, lpFee)
+#   let statsChange = IntegerEntry("global_feesEarned_"+assetIn, tryGetInteger("global_feesEarned_"+assetIn) + lpFee)
 
-  # stake/unstake assets
-  strict stakeTx = stakeIfNeeded(assetIn, cleanAmountIn+lpFee)
+#   # stake/unstake assets
+#   strict stakeTx = stakeIfNeeded(assetIn, cleanAmountIn+lpFee)
 
-  # prepare state changes
-  let volumeUsdUpdate = calculateUsdValue(assetId, cleanAmountIn, tryGetInteger("global_"+assetIn+"_balance"))
+#   # prepare state changes
+#   let volumeUsdUpdate = calculateUsdValue(assetId, cleanAmountIn, tryGetInteger("global_"+assetIn+"_balance"))
   
-  if (debug) then {throw(PIssuedWithMult.toString())} else {
-    (result ++ claimResult(i.caller)._1 ++ mintIndexIfNeeded(PIssuedWithMult) ++ [
-      IntegerEntry(i.caller.toString()+"_indexStaked", tryGetInteger(i.caller.toString()+"_indexStaked") + PIssuedWithMult),
-      IntegerEntry("global_indexStaked", tryGetInteger("global_indexStaked") + PIssuedWithMult),
-      IntegerEntry("global_poolToken_amount", tryGetInteger("global_poolToken_amount") + PIssuedWithMult),
+#   if (debug) then {throw(PIssuedWithMult.toString())} else {
+#     (result ++ claimResult(i.caller)._1 ++ mintIndexIfNeeded(PIssuedWithMult) ++ [
+#       IntegerEntry(i.caller.toString()+"_indexStaked", tryGetInteger(i.caller.toString()+"_indexStaked") + PIssuedWithMult),
+#       IntegerEntry("global_indexStaked", tryGetInteger("global_indexStaked") + PIssuedWithMult),
+#       IntegerEntry("global_poolToken_amount", tryGetInteger("global_poolToken_amount") + PIssuedWithMult),
 
-      # update volume stats
-      IntegerEntry("global_volume_usd", tryGetInteger("global_volume_usd") + volumeUsdUpdate),
-      interestChange,
-      statsChange,
-      ScriptTransfer(feesAddress, protocolFee, assetId)
-    ], PIssuedWithMult)
-  }
-}
+#       # update volume stats
+#       IntegerEntry("global_volume_usd", tryGetInteger("global_volume_usd") + volumeUsdUpdate),
+#       interestChange,
+#       statsChange,
+#       ScriptTransfer(feesAddress, protocolFee, assetId)
+#     ], PIssuedWithMult)
+#   }
+# }
 
 @Callable(i)
 func redeemIndex(poolTokenAmount: Int) = {
@@ -794,50 +793,50 @@ func redeemIndex(poolTokenAmount: Int) = {
   }
 }
 
-@Callable(i)
-func redeemIndexWithOneToken(debug: Boolean, poolTokenAmount: Int, assetOutIdStr: String) = {
-  if (poolTokenAmount > tryGetInteger(i.caller.toString() + "_indexStaked")) then {
-    throw("user doesn't have this amount of pool tokens")
-  } else if (isShutdown()) then {
-    throw("contract is on stop")
-  } else {
-    let PRedeemedWithMult = poolTokenAmount
-    let PRedeemedWithNoMult = fraction(PRedeemedWithMult, getKMult(), Scale16, DOWN)
+# @Callable(i)
+# func redeemIndexWithOneToken(debug: Boolean, poolTokenAmount: Int, assetOutIdStr: String) = {
+#   if (poolTokenAmount > tryGetInteger(i.caller.toString() + "_indexStaked")) then {
+#     throw("user doesn't have this amount of pool tokens")
+#   } else if (isShutdown()) then {
+#     throw("contract is on stop")
+#   } else {
+#     let PRedeemedWithMult = poolTokenAmount
+#     let PRedeemedWithNoMult = fraction(PRedeemedWithMult, getKMult(), Scale16, DOWN)
 
-    let (result, amountOut) = calcRedeemWithOneToken(assetOutIdStr, poolTokenAmount)
+#     let (result, amountOut) = calcRedeemWithOneToken(assetOutIdStr, poolTokenAmount)
 
-    let feeAmountOut = fraction(amountOut, Fee, FeeScale)
-    let cleanAmountOut = (amountOut - feeAmountOut)
+#     let feeAmountOut = fraction(amountOut, Fee, FeeScale)
+#     let cleanAmountOut = (amountOut - feeAmountOut)
 
-    # distributing fee
-    let protocolFee = fraction(feeAmountOut, 5, 10)
-    let lpFee = feeAmountOut - protocolFee
-    let interestChange = calcInterestChange(assetOutIdStr, lpFee)
-    let statsChange = IntegerEntry("global_feesEarned_"+assetOutIdStr, tryGetInteger("global_feesEarned_"+assetOutIdStr) + lpFee)
+#     # distributing fee
+#     let protocolFee = fraction(feeAmountOut, 5, 10)
+#     let lpFee = feeAmountOut - protocolFee
+#     let interestChange = calcInterestChange(assetOutIdStr, lpFee)
+#     let statsChange = IntegerEntry("global_feesEarned_"+assetOutIdStr, tryGetInteger("global_feesEarned_"+assetOutIdStr) + lpFee)
 
-    # stake/unstake assets
-    strict unstakeTx = unstakeIfNeeded(assetOutIdStr, cleanAmountOut+lpFee)
+#     # stake/unstake assets
+#     strict unstakeTx = unstakeIfNeeded(assetOutIdStr, cleanAmountOut+lpFee)
 
-    # prepare state changes
-    let volumeUsdUpdate = calculateUsdValue(assetOutIdStr.getAssetBytes(), cleanAmountOut, tryGetInteger("global_"+assetOutIdStr+"_balance"))
+#     # prepare state changes
+#     let volumeUsdUpdate = calculateUsdValue(assetOutIdStr.getAssetBytes(), cleanAmountOut, tryGetInteger("global_"+assetOutIdStr+"_balance"))
 
-    if (debug) then {throw(cleanAmountOut.toString())} else {
-      result ++ claimResult(i.caller)._1 ++ [
-        ScriptTransfer(i.caller, cleanAmountOut, assetOutIdStr.getAssetBytes()),
+#     if (debug) then {throw(cleanAmountOut.toString())} else {
+#       result ++ claimResult(i.caller)._1 ++ [
+#         ScriptTransfer(i.caller, cleanAmountOut, assetOutIdStr.getAssetBytes()),
 
-        IntegerEntry(i.caller.toString() + "_indexStaked", tryGetInteger(i.caller.toString() + "_indexStaked") - PRedeemedWithMult),
-        IntegerEntry("global_indexStaked", tryGetInteger("global_indexStaked") - PRedeemedWithMult),
-        IntegerEntry("global_poolToken_amount", tryGetInteger("global_poolToken_amount") - PRedeemedWithMult),
+#         IntegerEntry(i.caller.toString() + "_indexStaked", tryGetInteger(i.caller.toString() + "_indexStaked") - PRedeemedWithMult),
+#         IntegerEntry("global_indexStaked", tryGetInteger("global_indexStaked") - PRedeemedWithMult),
+#         IntegerEntry("global_poolToken_amount", tryGetInteger("global_poolToken_amount") - PRedeemedWithMult),
 
-        # update volume stats
-        IntegerEntry("global_volume_usd", tryGetInteger("global_volume_usd") + volumeUsdUpdate),
-        interestChange,
-        statsChange,
-        ScriptTransfer(feesAddress, protocolFee, assetOutIdStr.getAssetBytes())
-      ] ++ burnIndexIfNeeded(poolTokenAmount)
-    }
-  }
-}
+#         # update volume stats
+#         IntegerEntry("global_volume_usd", tryGetInteger("global_volume_usd") + volumeUsdUpdate),
+#         interestChange,
+#         statsChange,
+#         ScriptTransfer(feesAddress, protocolFee, assetOutIdStr.getAssetBytes())
+#       ] ++ burnIndexIfNeeded(poolTokenAmount)
+#     }
+#   }
+# }
 
 @Callable(i)
 func stakeIndex() = {
@@ -1102,11 +1101,11 @@ func transferOwnership(newOwnerAddress: String) = {
 @Callable(i)
 func setFee(newFee: Int) = {
   if (i.caller.toString() != tryGetString("static_poolOwner")) then {throw("this call available only for pool owner")}
-  else if (getInteger(govAddress, "approvedTx_"+i.transactionId.toBase58String()).valueOrElse(0) < 1) then {throw("this transaction needs approval from puzzle network")}
+  # else if (getInteger(govAddress, "approvedTx_"+i.transactionId.toBase58String()).valueOrElse(0) < 1) then {throw("this transaction needs approval from puzzle network")}
   else {
     [IntegerEntry("static_fee", newFee)]
   }
 }
 
-# @Verifier(tx)
-# func verify() = sigVerify(tx.bodyBytes, tx.proofs[0], masterPubKey)
+@Verifier(tx)
+func verify() = sigVerify(tx.bodyBytes, tx.proofs[0], masterPubKey)
