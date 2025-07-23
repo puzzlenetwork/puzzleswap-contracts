@@ -5,7 +5,7 @@
 # TODO
 # indefinite ranges
 
-let VERSION = "PZ-3.4.0 PROD"
+let VERSION = "PZ-3.5.0 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -117,7 +117,7 @@ let supportedFeeAssetsStr = [usdnAssetIdStr, puzzleAssetIdStr, usdtAssetIdStr, u
 
 let parentPoolAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "parentPoolAddress").valueOrElse("3PFDgzu1UtswAkCMxqqQjbTeHaX4cMab8Kh")))
 let masterAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "masterAddress").valueOrElse("3PLjwHcz9NEuaTo63NZR9B9okQiKQxZSbmf")))
-let masterPubKey = fromBase58String(getString(CONFIG_ADDRESS, "masterPubKey").valueOrElse("FqvBFqHgwDDpcPMEXSb3zFT1KHXb7kwyu9KxneVWaz5w")) # verifier
+let masterPubKey = fromBase58String(getString(CONFIG_ADDRESS, "masterPubKey").valueOrElse("2jTJGqHSopyj5d1cjbUe6f2jXqGMHE412cy3vGwYoRbP")) # verifier
 let oracleAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "oracleAddress").valueOrElse("3P8d1E1BLKoD52y3bQJ1bDTd2TD1gpaLn9t")))
 let stakingAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "stakingAddress").valueOrElse("3PFTbywqxtFfukX3HyT881g4iW5K4QL3FAS")))
 let feesAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "feesAddress").valueOrElse("3PFWAVKmXjfHXyzJb12jCbhP4Uhi9t4uWiD")))
