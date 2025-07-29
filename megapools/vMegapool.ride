@@ -5,7 +5,7 @@
 # TODO
 # indefinite ranges
 
-let VERSION = "PZ-3.5.0 PROD"
+let VERSION = "PZ-3.6.0 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -703,6 +703,8 @@ func init(assetIdsStr: String, assetWeightsStr: String, assetMaxSelloffStr: Stri
     throw("pool already inited")
   } else {
     let initialPoolTokens = calculatePoolTokensAmount(assetIds)
+
+    strict notifyInvoke = invoke(poolsHubAddress, "addSelfPool", [], [])
 
     if (initialPoolTokens == 0) then {throw("you need a bigger tokens amount to launch the pool")} else {
       prepareList() ++ prepareList2() ++
