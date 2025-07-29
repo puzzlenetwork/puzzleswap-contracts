@@ -1,9 +1,8 @@
 {-# STDLIB_VERSION 6 #-}
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
-{-# IMPORT artifacts/mainnet.ride #-}
 
-let VERSION = "RANGEHUB-2.1.0"
+let VERSION = "RANGEHUB-2.2.0"
 
 let shutdownAddresses = [
   "3PMKAL4cd77onkYuuU35115Wov1sLMEcFsv",
@@ -27,19 +26,7 @@ func getEntryKey(type: String) = {
 
 ## CALLABLES
 
-@Callable(i)
-func addEmptyContract(address: String, type: String) = {
-  let entryKey = getEntryKey(type)
-
-  if (i.caller == this) then {
-    [
-      StringEntry(entryKey, getString(entryKey).valueOrElse("") + address + ",")
-    ]
-  } else {
-    throw("no access")
-  }
-}
-
+# to be called by new ranges
 
 @Callable(i)
 func useEmptyContract(type: String) = {
@@ -60,14 +47,48 @@ func useEmptyContract(type: String) = {
 func addPool(address: String) = {
   if (i.caller == this) then { # || or smart contract allowed
     [
-      StringEntry("global_pools", getString("global_pools").valueOrElse("") + address + ","),
-      StringEntry("global_emptyPools", getString("global_emptyPools").valueOrElse("").split_4C(",").remove(address).makeString(","))
+      StringEntry("global_pools", getString("global_pools").valueOrElse("") + address + ",")
     ]
   } else {
     throw("no access")
   }
-} 
+}
 
+@Callable(i)
+func addSelfPool() = {
+  let scriptStr = i.caller.scriptHash().value().toBase58String()
+  if (getBoolean("approvedScript_"+scriptStr).valueOrElse(false)) then {
+    strict inv = invoke(this, "addPool", [i.caller.toString()], [])
+
+    []
+  } else {throw("account script is not listed")}
+}
+
+# to be called by admins
+
+@Callable(i)
+func whitelistScript(scriptStr: String, val: Boolean) = {
+  if (shutdownAddresses.indexOf(i.caller.toString()) != unit) then {
+    [
+      BooleanEntry("approvedScript_"+scriptStr, val)
+    ]
+  } else {
+    throw("no access")
+  }
+}
+
+@Callable(i)
+func addEmptyContract(address: String, type: String) = {
+  let entryKey = getEntryKey(type)
+
+  if (i.caller == this) then {
+    [
+      StringEntry(entryKey, getString(entryKey).valueOrElse("") + address + ",")
+    ]
+  } else {
+    throw("no access")
+  }
+}
 
 @Callable(i)
 func shutdownAssetIn(assetStr: String, val: Boolean) = {
@@ -79,7 +100,6 @@ func shutdownAssetIn(assetStr: String, val: Boolean) = {
     throw("no access")
   }
 }
-  
 
 @Callable(i)
 func shutdownAssetOut(assetStr: String, val: Boolean) = {
@@ -90,5 +110,4 @@ func shutdownAssetOut(assetStr: String, val: Boolean) = {
   } else {
     throw("no access")
   }
-} 
-
+}
