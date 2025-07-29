@@ -2,7 +2,7 @@
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 
-let VERSION = "RANGEHUB-2.2.0"
+let VERSION = "RANGEHUB-2.3.0"
 
 let shutdownAddresses = [
   "3PMKAL4cd77onkYuuU35115Wov1sLMEcFsv",
@@ -21,7 +21,7 @@ func remove(li: List[String], val: String) = {
 func getEntryKey(type: String) = {
     if type == "range" then "global_emptyPools"
     else if type == "staker_AP4Cb5xLYGH6ZigHreCZHoXpQTWDkPsG2BHqfDUx6taJ" then "global_emptyStakers_AP4Cb5xLYGH6ZigHreCZHoXpQTWDkPsG2BHqfDUx6taJ"
-    else throw("wrong type")
+    else "global_emptyUnknown"
 }
 
 ## CALLABLES
