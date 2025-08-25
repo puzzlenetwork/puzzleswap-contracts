@@ -2,11 +2,12 @@
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 
-let VERSION = "RANGEHUB-2.3.0"
+let VERSION = "RANGEHUB-2.4.0"
 
 let shutdownAddresses = [
   "3PMKAL4cd77onkYuuU35115Wov1sLMEcFsv",
-  "3P9xX849YJXg7C87v82cDyDy5VhKiPJpHo8"
+  "3P9xX849YJXg7C87v82cDyDy5VhKiPJpHo8",
+  "3PMcMiMEs6w56NRGacksXtFG5zS7doE9fpL"
 ]
 
 ## INTERNAL FUNCTIONS
@@ -22,6 +23,13 @@ func getEntryKey(type: String) = {
     if type == "range" then "global_emptyPools"
     else if type == "staker_AP4Cb5xLYGH6ZigHreCZHoXpQTWDkPsG2BHqfDUx6taJ" then "global_emptyStakers_AP4Cb5xLYGH6ZigHreCZHoXpQTWDkPsG2BHqfDUx6taJ"
     else "global_emptyUnknown"
+}
+
+func getCurrentPoolsBatch() = {
+  let batch = getInteger("global_lastPoolsBatch").valueOrElse(2)
+  let currentKey = "global_pools_" + batch.toString()
+  let currentVal = getString(currentKey).valueOrElse("")
+  if (currentVal.size() < 4800) then {batch} else {batch+1}
 }
 
 ## CALLABLES
@@ -42,12 +50,14 @@ func useEmptyContract(type: String) = {
   )
 }
 
-
 @Callable(i)
 func addPool(address: String) = {
+  let batch = getCurrentPoolsBatch()
+
   if (i.caller == this) then { # || or smart contract allowed
     [
-      StringEntry("global_pools", getString("global_pools").valueOrElse("") + address + ",")
+      StringEntry("global_pools_"+batch.toString(), getString("global_pools_"+batch.toString()).valueOrElse("") + address + ","),
+      IntegerEntry("global_lastPoolsBatch", batch)
     ]
   } else {
     throw("no access")
