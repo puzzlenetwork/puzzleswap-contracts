@@ -1,0 +1,99 @@
+{-# STDLIB_VERSION 6 #-}
+{-# CONTENT_TYPE DAPP #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+
+let VERSION = "STLP-1.1.0"
+let DESCRIPTION = "Single Token Liquidity Provision for Ranges. Described as a 'straightforward approach' in https://medium.com/@izhur27/inventing-ranges-pt-3-single-token-liquidity-provision-59f96c482d11"
+
+let Scale8 = 100000000
+
+func isShutdown() = {
+  match getBoolean(Address(base58'3PEpv9hRFWEEBU22WRnLsw1bH4YGtcU728o'), "is_shutdown") {
+    case x: Boolean => x
+    case _ => false
+  }
+}
+
+func getAssetBytes(assetIdStr: String) = {
+  if (assetIdStr == "WAVES") then {unit} else {assetIdStr.fromBase58String()}
+}
+
+func getAssetString(assetId: ByteVector|Unit) = {
+  match assetId {
+    case b:ByteVector => assetId.value().toBase58String()
+    case _ => "WAVES"
+  }
+}
+
+func getTokenBalance(assetId: ByteVector|Unit) = {
+  match (assetId) {
+      case t:ByteVector => assetBalance(this, t)
+      case _ => wavesBalance(this).available
+    }
+}
+
+func addAssetBytesToList(accum: List[ByteVector], item: String) = { accum ++ [item.getAssetBytes()] }
+
+
+## CALLABLES
+
+@Callable(i)
+func generateWithOneToken(rangeAddressStr: String, needStake: Boolean) = {
+  let baseAssetId = i.payments[0].assetId
+  
+  let mainAddress = Address(rangeAddressStr.fromBase58String())
+  let assetIdsStr = getStringValue(mainAddress, "static_tokenIds").split(",")
+  let assetIds = FOLD<10>(getStringValue(mainAddress, "static_tokenIds").split(","), [], addAssetBytesToList)
+  let secondaryAssetIds = assetIds.removeByIndex(assetIds.indexOf(baseAssetId).value())
+  let poolIndexIdStr = getStringValue(mainAddress, "static_poolToken_idStr")
+  let poolIndexId = fromBase58String(poolIndexIdStr)
+
+  let payAmount = i.payments[0].amount
+
+  func getAssetW(assetIdStr: String) = {
+    fraction(
+      getIntegerValue(mainAddress, "static_" + assetIdStr + "_weight") * Scale8,
+      getIntegerValue(mainAddress, "global_" + assetIdStr + "_factBalance"),
+      getIntegerValue(mainAddress, "global_" + assetIdStr + "_balance")
+    )
+  }
+
+  func f(accum: Int, nextAssetIdStr: String) = {accum + getAssetW(nextAssetIdStr)}
+  let wSum = FOLD<10>(assetIdsStr, 0, f)
+
+  func calcAssetToSwap(accum: List[AttachedPayment], assetId: ByteVector) = {
+    let assetIdStr = assetId.getAssetString()
+    let assetW = getAssetW(assetIdStr)
+    let amount = fraction(payAmount, assetW, wSum)
+    strict in = match reentrantInvoke(mainAddress, "swap", [assetId.getAssetString(), 0], [AttachedPayment(baseAssetId, amount)]) {
+          case x: Int => x
+          case _ => 0
+    }
+    accum ++ [AttachedPayment(assetId, in)]
+  }
+  
+  let baseAssetWeight = getAssetW(baseAssetId.getAssetString())
+  let basePayAmount = fraction(payAmount, baseAssetWeight, wSum)
+  strict exchangeInvokes = FOLD<9>(secondaryAssetIds, [AttachedPayment(baseAssetId, basePayAmount)], calcAssetToSwap)
+
+  # add liquidity
+  let returnFlag = true
+  strict PIssuedAmount = match reentrantInvoke(mainAddress, "generateIndex", [returnFlag], exchangeInvokes) {
+    case x: Int => x
+    case _ => 0
+  }
+
+  # unstake index
+  strict unstakeInvoke = reentrantInvoke(mainAddress, "unstakeIndex", [PIssuedAmount], [])
+
+  if (needStake) then {
+    # stake index for invoker
+    strict stakeInvoke =  reentrantInvoke(mainAddress, "stakeIndexFor", [i.caller.toString()], [AttachedPayment(poolIndexId, PIssuedAmount)])
+    []
+  } else {
+    # transfer index to invoker
+    [
+      ScriptTransfer(i.caller, PIssuedAmount, poolIndexId)
+    ]
+  }
+}
