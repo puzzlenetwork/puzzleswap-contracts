@@ -5,7 +5,7 @@
 # TODO
 # indefinite ranges
 
-let VERSION = "PZ-3.6.0 PROD"
+let VERSION = "PZ-3.6.1 PROD-refactor"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -81,9 +81,6 @@ func getTokenBalance(assetId: ByteVector|Unit) = {
     }
 }
 
-func getFactBalance(assetIdStr: String) = {
-    tryGetInteger("global_"+assetIdStr+"_factBalance")
-}
 
 func addAssetBytesToList(accum: List[ByteVector|Unit], item: String) = { accum ++ [item.getAssetBytes()] }
 func addAssetWeightToList(accum: List[Int], item: ByteVector|Unit) = { accum ++ [tryGetInteger("static_" + item.getAssetString() + "_weight")] }
@@ -137,6 +134,62 @@ let Scales = FOLD<10>(assetIds, [], addAssetScaleToList)
 let Fee = tryGetInteger("static_fee")
 let earnedAssets = assetIds
 
+## HELPER GETTERS
+func _get(assetId: String, param: String) = {
+  tryGetInteger("global_" + assetId + "_" + param)
+}
+
+func _get_feesEarned(assetId: String) = {
+  tryGetInteger("global_feesEarned_" + assetId)
+}
+
+func _get_lastCheck_interest(assetId: String) = {
+  tryGetInteger("global_lastCheck_" + assetId + "_interest")
+}
+
+func _get_extraEarned(assetId: String) = {
+  tryGetInteger("global_extraEarned_" + assetId)
+}
+
+func loadGlobalTokenParams(assetId: String) = {
+  match getString("globalParams_" + assetId) {
+        case p: String =>
+            let params = p.split("__")
+            (
+                params[0].parseIntValue(),   # balance
+                params[1].parseIntValue(),   # factBalance
+                params[2].parseIntValue(),   # feesEarned
+                params[3].parseIntValue(),   # lastCheckInterest
+                params[4].parseIntValue(),   # extraEarned
+                params[5].parseIntValue(),   # selloff 
+                params[6].parseIntValue(),   # selloffStartBalance
+                params[7].parseIntValue()    # selloffStartHeight
+            )
+        case _ => (
+          _get(assetId, "balance"), 
+          _get(assetId, "factBalance"), 
+          _get_feesEarned(assetId), 
+          _get_lastCheck_interest(assetId), 
+          _get_extraEarned(assetId), 
+          _get(assetId, "selloff"), 
+          _get(assetId, "selloffStartBalance"), 
+          _get(assetId, "selloffStartHeight"))
+  }
+}
+
+func saveGlobalTokenParams(assetId: String, params: (Int, Int, Int, Int, Int, Int, Int, Int)) = {
+    StringEntry("globalParams_" + assetId, makeString([
+        params._1.toString(),   # balance
+        params._2.toString(),   # factBalance
+        params._3.toString(),   # feesEarned
+        params._4.toString(),   # lastCheckInterest
+        params._5.toString(),   # extraEarned
+        params._6.toString(),   # selloff 
+        params._7.toString(),   # selloffStartBalance
+        params._8.toString()    # selloffStartHeight 
+    ], "__"))
+}
+
 
 ## UTIL METHODS ##
 
@@ -150,9 +203,15 @@ func isShutdown() = {
   }
 }
 
+func getFactBalance(assetIdStr: String) = {
+  let assetParams = loadGlobalTokenParams(assetIdStr)
+  assetParams._2
+}
+
 func getCurrentTokenBalance(tokenNum: Int) = {
   let tokenIdStr = assetIds[tokenNum].getAssetString()
-  tryGetInteger("global_"+tokenIdStr+"_balance")
+  let tokenParams = loadGlobalTokenParams(tokenIdStr)
+  tokenParams._1
 }
 
 # IF NEEDED functions
@@ -240,7 +299,7 @@ func getPriceFromOracle(assetIdStr: String) = {
   }
 }
 
-func calculateUsdValue(assetId: ByteVector|Unit, amount: Int, aBalance: Int) = {
+func calculateUsdValue(assetId: ByteVector|Unit, amount: Int, aBalance: Int, feeAssetBalance: Int) = {
 
   let assetWeight = tryGetInteger("static_"+assetId.getAssetString()+"_weight")
 
@@ -248,7 +307,6 @@ func calculateUsdValue(assetId: ByteVector|Unit, amount: Int, aBalance: Int) = {
   let feeAssetScale = getIntegerValue(this, "static_"+feeAssetStr+"_scale")
   let feeAssetNum = assetIds.indexOf(feeAssetStr.getAssetBytes()).value()
   let feeAssetWeight = AssetsWeights[feeAssetNum]
-  let feeAssetBalance = tryGetInteger("global_"+feeAssetStr+"_balance")
   let valInFeeAsset = fraction( amount, feeAssetBalance / feeAssetWeight, aBalance / assetWeight )
 
   let feeAssetPrice = getPriceFromOracle(feeAssetStr)
@@ -261,8 +319,9 @@ func calcAvgConcentration() = {
     func f(accum: (Int, Int), next: ByteVector|Unit) = {
         let assetIdStr = next.getAssetString()
         let weight = tryGetInteger("static_"+assetIdStr+"_weight")
-        let assetFactBalance = tryGetInteger("global_"+assetIdStr+"_factBalance")
-        let assetVirtBalance = tryGetInteger("global_"+assetIdStr+"_balance")
+        let assetParams = loadGlobalTokenParams(assetIdStr)
+        let assetFactBalance = assetParams._2
+        let assetVirtBalance = assetParams._1
 
         (accum._1 + fraction(assetFactBalance, weight, assetVirtBalance), accum._2+weight)
     }
@@ -291,8 +350,10 @@ func handlePoolTokensAdd(PIssued: Int, payments: List[AttachedPayment], userAddr
 
   func handleTokenChange(accum: List[IntegerEntry|ScriptTransfer], tokenId: ByteVector|Unit) = {
     let assetIdStr = tokenId.getAssetString()
+    let assetParams = loadGlobalTokenParams(assetIdStr)
+    # let (_balance, _factBalance, _feesEarned, _lastCheckInterest, _extraEarned, _selloff, _selloffStartBalance, _selloffStartHeight) = assetParams._1, assetParams._2 ...
     let paymentAmount = getTokenPaymentAmount(tokenId)
-    let Bk = getFactBalance(assetIdStr)
+    let Bk = assetParams._2
     let PSupply = getVirtualPoolTokenAmount()
     let tokenDecimals = tryGetInteger("static_"+assetIdStr+"_scale")
     let a1 = fraction((PSupply + PIssued).toBigInt()*Scale8.toBigInt(), tokenDecimals.toBigInt(), PSupply.toBigInt(), CEILING)
@@ -302,12 +363,19 @@ func handlePoolTokensAdd(PIssued: Int, payments: List[AttachedPayment], userAddr
     strict stakeTx = stakeIfNeeded(assetIdStr, Dk)
 
     let t = if (needChange && toReturn > 0) then {[ScriptTransfer(userAddress, toReturn, tokenId)]} else {[]}
-    accum ++ t ++ [
-        IntegerEntry("global_"+assetIdStr+"_factBalance", tryGetInteger("global_"+assetIdStr+"_factBalance") + Dk), 
-        IntegerEntry("global_"+assetIdStr+"_balance", fraction(tryGetInteger("global_"+assetIdStr+"_balance"), PSupply+PIssued, PSupply))
-    ] ++ if (tryGetInteger("global_"+assetIdStr+"_selloffStartHeight") != height / 100 * 100) then [] else [
-        IntegerEntry("global_"+assetIdStr+"_selloffStartBalance", fraction(tryGetInteger("global_"+assetIdStr+"_selloffStartBalance"), PSupply+PIssued, PSupply))
-    ]
+    let selloffStartBalance = if (assetParams._8 != height / 100 * 100) then assetParams._7  else fraction(assetParams._7, PSupply+PIssued, PSupply)
+    let assetParamsUpd = (
+      fraction(assetParams._1, PSupply+PIssued, PSupply),
+      assetParams._2 + Dk,
+      assetParams._3,
+      assetParams._4,
+      assetParams._5,
+      assetParams._6,
+      selloffStartBalance,
+      assetParams._8
+    )
+
+    accum ++ t ++ [saveGlobalTokenParams(assetIdStr, assetParamsUpd)]
   }
 
   FOLD<10>(assetIds, [], handleTokenChange)
@@ -315,8 +383,9 @@ func handlePoolTokensAdd(PIssued: Int, payments: List[AttachedPayment], userAddr
 
 func calcMintedWithOneToken(assetAddedIdStr: String, amount: Int) = {
   let PSupply = getVirtualPoolTokenAmount()
-  let assetFactBalance = tryGetInteger("global_"+assetAddedIdStr+"_factBalance")
-  let assetVirtBalance = tryGetInteger("global_"+assetAddedIdStr+"_balance")
+  let assetParams = loadGlobalTokenParams(assetAddedIdStr)
+  let assetFactBalance = assetParams._2
+  let assetVirtBalance = assetParams._1
   let assetWeight = tryGetInteger("static_"+assetAddedIdStr+"_weight")
   let assetScale = tryGetInteger("static_"+assetAddedIdStr+"_scale")
   let assetDecimals = tryGetInteger("static_"+assetAddedIdStr+"_decimals")
@@ -329,17 +398,26 @@ func calcMintedWithOneToken(assetAddedIdStr: String, amount: Int) = {
 
   let avgConc = calcAvgConcentration()
   let PIssued = fraction(PIssuedNoMultiplier, avgConc._2, avgConc._1)
-
+  let assetParamsUpd = (
+    assetVirtBalance + amount, # fraction(avgConc._2, amount, avgConc._1)) # fraction(assetVirtBalance, PSupply+PIssued, PSupply))  # OR amount * leverage
+    assetFactBalance + amount,
+    assetParams._3,
+    assetParams._4,
+    assetParams._5,
+    assetParams._6,
+    assetParams._7,
+    assetParams._8
+  )
   ([
-        IntegerEntry("global_"+assetAddedIdStr+"_factBalance", assetFactBalance + amount), 
-        IntegerEntry("global_"+assetAddedIdStr+"_balance", assetVirtBalance + amount) # fraction(avgConc._2, amount, avgConc._1)) # fraction(assetVirtBalance, PSupply+PIssued, PSupply))  # OR amount * leverage
+        saveGlobalTokenParams(assetAddedIdStr, assetParamsUpd) 
   ], PIssued)
 }
 
 func calcRedeemWithOneToken(assetOutIdStr: String, PRedeemed: Int) = {
   let PSupply = getVirtualPoolTokenAmount()
-  let assetFactBalance = tryGetInteger("global_"+assetOutIdStr+"_factBalance")
-  let assetVirtBalance = tryGetInteger("global_"+assetOutIdStr+"_balance")
+  let assetParams = loadGlobalTokenParams(assetOutIdStr)
+  let assetFactBalance = assetParams._2
+  let assetVirtBalance = assetParams._1
   let assetWeight = tryGetInteger("static_"+assetOutIdStr+"_weight")
   let assetScale = tryGetInteger("static_"+assetOutIdStr+"_scale")
   let assetDecimals = tryGetInteger("static_"+assetOutIdStr+"_decimals")
@@ -354,9 +432,18 @@ func calcRedeemWithOneToken(assetOutIdStr: String, PRedeemed: Int) = {
   
   if (assetFactBalance < amountOut) then {throw("no available fact liquidity to withdraw in one token")}
   else {
+    let assetParamsUpd = (
+    assetVirtBalance - amountOut, # fraction(avgConc._2, amountOut, avgConc._1)) # fraction(assetVirtBalance, PSupply-PRedeemed, PSupply))
+    assetFactBalance - amountOut,
+    assetParams._3,
+    assetParams._4,
+    assetParams._5,
+    assetParams._6,
+    assetParams._7,
+    assetParams._8
+  )
     ([
-          IntegerEntry("global_"+assetOutIdStr+"_factBalance", assetFactBalance - amountOut), 
-          IntegerEntry("global_"+assetOutIdStr+"_balance", assetVirtBalance - amountOut) # fraction(avgConc._2, amountOut, avgConc._1)) # fraction(assetVirtBalance, PSupply-PRedeemed, PSupply))
+          saveGlobalTokenParams(assetOutIdStr, assetParamsUpd)    
     ], amountOut)
   }
 }
@@ -364,7 +451,8 @@ func calcRedeemWithOneToken(assetOutIdStr: String, PRedeemed: Int) = {
 func handlePoolTokensRedeem(PRedeemed: Int, userAddress: Address) = {
   func handleTokenRedeem(accum: List[IntegerEntry|ScriptTransfer], tokenId: ByteVector|Unit) = {
     let assetIdStr = tokenId.getAssetString()
-    let Bk = getFactBalance(assetIdStr)
+    let assetParams = loadGlobalTokenParams(assetIdStr)
+    let Bk = assetParams._2
     let PSupply = getVirtualPoolTokenAmount()
     let tokenDecimals = tryGetInteger("static_"+assetIdStr+"_scale")
 
@@ -373,14 +461,22 @@ func handlePoolTokensRedeem(PRedeemed: Int, userAddress: Address) = {
       (Scale16.toBigInt() - psuppl), Bk.toBigInt(), Scale16.toBigInt(), CEILING).toInt()
 
     strict unstakeTx = unstakeIfNeeded(assetIdStr, amount)
+    let selloffStartBalance = if (assetParams._8 != height / 100 * 100) then assetParams._7  else fraction(assetParams._7, PSupply-PRedeemed, PSupply)
+    
+    let assetParamsUpd = (
+      fraction(assetParams._1, PSupply-PRedeemed, PSupply),
+      assetParams._2 - amount,
+      assetParams._3,
+      assetParams._4,
+      assetParams._5,
+      assetParams._6,
+      selloffStartBalance,
+      assetParams._8
+    )
 
     accum ++ [
-        IntegerEntry("global_"+assetIdStr+"_factBalance", tryGetInteger("global_"+assetIdStr+"_factBalance") - amount),
-        IntegerEntry("global_"+assetIdStr+"_balance", fraction(tryGetInteger("global_"+assetIdStr+"_balance"), PSupply-PRedeemed, PSupply)),
         ScriptTransfer(userAddress, amount, tokenId)
-    ] ++ if (tryGetInteger("global_"+assetIdStr+"_selloffStartHeight") != height / 100 * 100) then [] else [
-        IntegerEntry("global_"+assetIdStr+"_selloffStartBalance", fraction(tryGetInteger("global_"+assetIdStr+"_selloffStartBalance"), PSupply-PRedeemed, PSupply))
-    ]
+    ] ++ [saveGlobalTokenParams(assetIdStr, assetParamsUpd)]
   }
 
   FOLD<10>(assetIds, [], handleTokenRedeem)
@@ -407,11 +503,15 @@ func calculateOutAmount(AmountIn: Int, assetIn: ByteVector|Unit, assetOut: ByteV
 func claimResult(address: Address) = {
   let addressStr = address.toString()
   let indexAmount = tryGetInteger(addressStr + "_indexStaked")
+  let feeAssetStr = tryGetString("static_feeToken")
+  let feeAssetParams = loadGlobalTokenParams(feeAssetStr)
+  let feeTokenBalance = feeAssetParams._1
 
   func handler(accum: (List[IntegerEntry|ScriptTransfer], Int), assetId: ByteVector|Unit) = {
     let assetIdStr = assetId.getAssetString()
-    let currentTokenInterest = tryGetInteger("global_lastCheck_" + assetIdStr + "_interest")    
-    let aBalance = tryGetInteger("global_"+assetId.getAssetString()+"_balance")
+    let assetParams = loadGlobalTokenParams(assetIdStr)
+    let currentTokenInterest = assetParams._4
+    let aBalance = assetParams._1
 
     let rewardAmount = fraction(indexAmount, (currentTokenInterest - tryGetInteger(addressStr + "_lastCheck_" + assetIdStr + "_interest")), Scale16)
     strict unstakeInv = unstakeIfNeeded(assetIdStr, rewardAmount)
@@ -419,7 +519,7 @@ func claimResult(address: Address) = {
     let transfer = if (rewardAmount == 0) then {[]} else {[ScriptTransfer(address, rewardAmount, assetId)]}
     (accum._1 ++ transfer ++ [
       IntegerEntry(addressStr + "_lastCheck_" + assetIdStr + "_interest", currentTokenInterest)
-    ], accum._2 + calculateUsdValue(assetId, rewardAmount, aBalance)) # TODO: usd calculation goes wrong if out of range
+    ], accum._2 + calculateUsdValue(assetId, rewardAmount, aBalance, feeTokenBalance)) # TODO: usd calculation goes wrong if out of range
   }
   
   let accum = FOLD<10>(earnedAssets, ([], 0), handler)
@@ -444,26 +544,23 @@ func calcInterestChange(assetIdStr: String, lpFee: Int) = {
     # TODO: handle totalIndex = 0
     let totalIndex = tryGetInteger("global_indexStaked")
     let interestDelta = fraction(lpFee, Scale16, totalIndex)
-    IntegerEntry("global_lastCheck_"+assetIdStr+"_interest", tryGetInteger("global_lastCheck_"+assetIdStr+"_interest") + interestDelta)
+    interestDelta
 }
 
-func updSelloffData(assetIdStr: String, amountIn: Int) = {
+func updSelloffData(assetIdStr: String, amountIn: Int, balance: Int, selloffParams: (Int, Int, Int)) = {
   let currentPeriod = (height / 100) * 100
-  let prevPeriod = tryGetInteger("global_"+assetIdStr+"_selloffStartHeight")
-  let prevSelloff = if (currentPeriod == prevPeriod) then tryGetInteger("global_"+assetIdStr+"_selloff") else 0
-  let selloffStartBalance = if (currentPeriod == prevPeriod) then tryGetInteger("global_"+assetIdStr+"_selloffStartBalance") else tryGetInteger("global_"+assetIdStr+"_balance")
+  let prevPeriod = selloffParams._2 
+  let prevSelloff = if (currentPeriod == prevPeriod) then selloffParams._1 else 0 
+  let selloffStartBalance = if (currentPeriod == prevPeriod) then selloffParams._3 else balance 
   let selloffDelta = fraction(Scale16, amountIn, selloffStartBalance)
 
   let maxSelloff = tryGetInteger("static_"+assetIdStr+"_maxSelloff")
   if ((prevSelloff + selloffDelta) > maxSelloff && maxSelloff != 0) then {
     throw("max selloff reached for this asset " + assetIdStr)
   } else {
-    [
-      IntegerEntry("global_"+assetIdStr+"_selloff", prevSelloff + selloffDelta)
-    ] ++ if (currentPeriod == prevPeriod) then [] else [
-      IntegerEntry("global_"+assetIdStr+"_selloffStartHeight", currentPeriod),
-      IntegerEntry("global_"+assetIdStr+"_selloffStartBalance", selloffStartBalance)
-    ]
+    let startH = if (currentPeriod == prevPeriod) then prevPeriod else currentPeriod
+    let startB = if (currentPeriod == prevPeriod) then selloffParams._3 else selloffStartBalance
+    (prevSelloff + selloffDelta, startH, startB)
   }
 }
 
@@ -540,7 +637,7 @@ func validateWeights(weights: List[String]) = {
     let wInt = w.parseInt().valueOrErrorMessage("Wrong weight format: " + w)
     if (wInt < MIN_WEIGHT || wInt > MAX_WEIGHT) then {
         throw("Weight should be in range " + MIN_WEIGHT.toString() + " - " + MAX_WEIGHT.toString() + ", current: " + w)
-      } else {accum}
+      } else {accum + wInt}
   }
   FOLD<10>(weights, 0, v)
 }
@@ -548,10 +645,12 @@ func validateWeights(weights: List[String]) = {
 # VIRTUAL GETTERS
 
 func getP1P2(assetIdStr: String, baseAssetIdStr: String) = {
-    let B1 = tryGetInteger("global_"+baseAssetIdStr+"_balance")
-    let B2 = tryGetInteger("global_"+assetIdStr+"_balance")
-    let F1 = getFactBalance(baseAssetIdStr)
-    let F2 = getFactBalance(assetIdStr)
+    let assetParams = loadGlobalTokenParams(assetIdStr)
+    let baseAssetParams = loadGlobalTokenParams(baseAssetIdStr)
+    let B1 = baseAssetParams._1 
+    let B2 = assetParams._1 
+    let F1 = baseAssetParams._2 
+    let F2 = assetParams._2 
     let S1 = tryGetInteger("static_"+baseAssetIdStr+"_scale")
     let S2 = tryGetInteger("static_"+assetIdStr+"_scale")
     let D1 = tryGetInteger("static_"+baseAssetIdStr+"_decimals")
@@ -596,6 +695,7 @@ func preInit(assetIdsStr: String, assetWeightsStr: String, assetMaxSelloffStr: S
 
   let assetIdsStrLi = assetIdsStr.split(",") 
   let assetMaxSelloffStrLi = assetMaxSelloffStr.split(",")
+  let assetWeightsStrLi = assetWeightsStr.split(",")
   let assetIdsLi = FOLD<10>(assetIdsStrLi, [], addAssetBytesToList)
   let feeAssetChosenStr = FOLD<10>(assetIdsStrLi, "", checkFeeAsset)
   let feeAssetStr = if (feeAssetChosenStr == "") then {baseTokenIdStr} else {feeAssetChosenStr}
@@ -604,8 +704,9 @@ func preInit(assetIdsStr: String, assetWeightsStr: String, assetMaxSelloffStr: S
   else if (this != i.caller) then {throw("admin only")}
   else if (poolDomain.size() > 13) then {throw("too large pool domain")}
   else if (fee > 500 || fee < 0) then {throw("fee value must be between 0 and 500 (0-5%)")}
+  else if (validateWeights(assetWeightsStrLi) != 10000) then {throw("weights sum should be 10000, current: " + toString(validateWeights(assetWeightsStrLi)))}
   else {
-    let assetWeightsStrLi = assetWeightsStr.split(",")
+    
     # let assetWeightsSum = FOLD<10>(assetWeightsStrLi, 0, sum)
 
     func addTokenDataEntries(accum: List[IntegerEntry], assetNum: Int) = {
@@ -664,25 +765,44 @@ func init(assetIdsStr: String, assetWeightsStr: String, assetMaxSelloffStr: Stri
   strict preInitInv = invoke(this, "preInit", [assetIdsStr, assetWeightsStr, assetMaxSelloffStr, baseTokenIdStr, poolDomain, i.caller.toString(), fee], [])
   
   let vBalances = parstStrToIntList(vBalancesStr)
+  
+  func getPaymentAmount(assetIdStr: String) = {
+    func handler(accum: Int, payment: AttachedPayment) = {
+        if (payment.assetId.getAssetString() == assetIdStr) then payment.amount else accum
+    }
+    FOLD<10>(i.payments, 0, handler)
+  }
 
   func prepareList() = {
     func handler(accum: List[IntegerEntry], assetId:ByteVector|Unit) = {
+      let assetIdStr = assetId.getAssetString()
       let n = assetIds.indexOf(assetId).value()
+      let paymentAmount = getPaymentAmount(assetIdStr)
+      let assetParams = loadGlobalTokenParams(assetIdStr)
+      let assetParamsUpd = (
+        vBalances[n],
+        paymentAmount,
+        assetParams._3,
+        assetParams._4,
+        assetParams._5,
+        assetParams._6,
+        assetParams._7,
+        assetParams._8
+      )
       accum ++ [
-        IntegerEntry("global_" + assetId.getAssetString() + "_balance", vBalances[n]),
-        IntegerEntry("global_lastCheck_" + assetId.getAssetString() + "_interest", 0)
+        saveGlobalTokenParams(assetIdStr, assetParamsUpd)
       ]
     }
     FOLD<10>(assetIds, [], handler)
   }
 
-  func prepareList2() = {
-    func handler1(accum: List[IntegerEntry], payment: AttachedPayment) = {
-        strict stakeTx = stakeIfNeeded(payment.assetId.getAssetString(), payment.amount)
-        accum ++ [ IntegerEntry("global_" + payment.assetId.getAssetString() + "_factBalance", payment.amount) ]
-    }
-    FOLD<10>(i.payments, [], handler1)
-  }
+  # func prepareList2() = {
+  #   func handler1(accum: List[IntegerEntry], payment: AttachedPayment) = {
+  #       strict stakeTx = stakeIfNeeded(payment.assetId.getAssetString(), payment.amount)
+  #       accum ++ [ IntegerEntry("global_" + payment.assetId.getAssetString() + "_factBalance", payment.amount) ]
+  #   }
+  #   FOLD<10>(i.payments, [], handler1)
+  # }
 
   func calculatePoolTokensAmount(assetId: List[ByteVector|Unit]) = {
     func handler(accum: Int, assetId: ByteVector|Unit) = {
@@ -707,7 +827,7 @@ func init(assetIdsStr: String, assetWeightsStr: String, assetMaxSelloffStr: Stri
     strict notifyInvoke = invoke(poolsHubAddress, "addSelfPool", [], [])
 
     if (initialPoolTokens == 0) then {throw("you need a bigger tokens amount to launch the pool")} else {
-      prepareList() ++ prepareList2() ++
+      prepareList() ++
       [
         IntegerEntry("global_poolToken_amount", initialPoolTokens),
         IntegerEntry("global_wasInited", 1),
@@ -918,9 +1038,20 @@ func addInterestExternal() = {
 
     if (assetIds.indexOf(assetId) == unit) then {throw("you can only add interest for assets in the pool")}
     else {
+      let params = loadGlobalTokenParams(assetIdStr)
+      let interestDelta = calcInterestChange(assetIdStr, amount)
+      let updParams = (
+        params._1,
+        params._2,
+        params._3,
+        params._4 + interestDelta,
+        params._5 + amount,
+        params._6,
+        params._7,
+        params._8
+      )
         [
-            calcInterestChange(assetIdStr, amount),
-            IntegerEntry("global_extraEarned_"+assetIdStr, tryGetInteger("global_extraEarned_"+assetIdStr) + amount)
+            saveGlobalTokenParams(assetIdStr, updParams)
         ]
     }
 }
@@ -932,9 +1063,20 @@ func notifyStakingPayment(assetIdStr: String, amount: Int) = {
     if (assetIds.indexOf(assetId) == unit) then {throw("you can only add interest for assets in the pool")}
     else if (tryGetString("static_stakingContract_"+assetIdStr) != i.caller.toString()) then {throw("can only be invoked by staker contract")}
     else {
+      let params = loadGlobalTokenParams(assetIdStr)
+      let interestDelta = calcInterestChange(assetIdStr, amount)
+      let updParams = (
+        params._1,
+        params._2,
+        params._3,
+        params._4 + interestDelta,
+        params._5 + amount,
+        params._6,
+        params._7,
+        params._8
+      )
         [
-            calcInterestChange(assetIdStr, amount),
-            IntegerEntry("global_extraEarned_"+assetIdStr, tryGetInteger("global_extraEarned_"+assetIdStr) + amount)
+            saveGlobalTokenParams(assetIdStr, updParams)
         ]
     }
 }
@@ -953,8 +1095,17 @@ func swap(assetOut: String, minimum: Int) = {
   let scaleOut = Scale8 / tryGetInteger("static_" + assetOut + "_scale")
   
   # markup all asset numbers
-  let AssetInBalance = tryGetInteger("global_"+AssetIn.getAssetString()+"_balance")
-  let AssetOutBalance = tryGetInteger("global_"+assetOut+"_balance")
+  let assetInParams = loadGlobalTokenParams(AssetIn.getAssetString())
+  let assetOutParams = loadGlobalTokenParams(assetOut)
+
+  let AssetInBalance = assetInParams._1
+  let AssetInFactBalance = assetInParams._2
+  let assetInFeesEarned = assetInParams._3
+  let assetInLastCheckInterest = assetInParams._4
+  
+  let AssetOutBalance = assetOutParams._1
+  let assetOutFactBalance = assetOutParams._2
+
   let AssetInBalanceScaled = AssetInBalance * scaleIn
   let AssetOutBalanceScaled = AssetOutBalance * scaleOut
   let feeAmountIn = fraction(AmountIn, Fee, FeeScale)
@@ -975,7 +1126,7 @@ func swap(assetOut: String, minimum: Int) = {
   else if (AssetOut == AssetIn) then {
     throw("this swap is not allowed")
   }
-  else if (getFactBalance(assetOut) - AmountOut < 0) then {
+  else if (assetOutFactBalance - AmountOut < 0) then {
     throw("contract is out of reserves")
   }
   else if (isShutdown()) then {
@@ -991,8 +1142,8 @@ func swap(assetOut: String, minimum: Int) = {
     # distribute fees
     let protocolFee = fraction(feeAmountIn, 5, 10)
     let lpFee = feeAmountIn - protocolFee
-    let interestChange = calcInterestChange(assetIn, lpFee)
-    let statsChange = IntegerEntry("global_feesEarned_"+assetIn, tryGetInteger("global_feesEarned_"+assetIn) + lpFee)
+    let interestDelta = calcInterestChange(assetIn, lpFee)
+    # let statsChange = IntegerEntry("global_feesEarned_"+assetIn, tryGetInteger("global_feesEarned_"+assetIn) + lpFee)
 
     # stake/unstake assets
     strict stakeTx = stakeIfNeeded(assetIn, cleanAmountIn+lpFee)
@@ -1003,20 +1154,45 @@ func swap(assetOut: String, minimum: Int) = {
     let newBalanceOut = AssetOutBalance2
 
     # prepare state changes
-    let assetInChange = IntegerEntry("global_"+AssetIn.getAssetString()+"_balance", newBalanceIn)
-    let assetOutChange = IntegerEntry("global_"+assetOut+"_balance", newBalanceOut)
-    let assetInFactChange = IntegerEntry("global_"+AssetIn.getAssetString()+"_factBalance", tryGetInteger("global_"+AssetIn.getAssetString()+"_factBalance")+cleanAmountIn)
-    let assetOutFactChange = IntegerEntry("global_"+assetOut+"_factBalance", tryGetInteger("global_"+assetOut+"_factBalance")-AmountOut)
+    # ??? for selloff update virtualBalance or factBalance? 
+    let assetInSelloffData = updSelloffData(assetIn, cleanAmountIn, AssetInBalance, (assetInParams._6, assetInParams._7, assetInParams._8))
+    let assetOutSelloffData = updSelloffData(assetOut, -AmountOut, AssetOutBalance, (assetOutParams._6, assetOutParams._7, assetOutParams._8))
+    
+    let assetInFinalParams = (
+      newBalanceIn,
+      AssetInFactBalance + cleanAmountIn,
+      assetInFeesEarned + lpFee,
+      assetInLastCheckInterest + interestDelta,
+      assetInParams._5,
+      assetInSelloffData._1,
+      assetInSelloffData._2,
+      assetInSelloffData._3
+    )
 
-    let volumeUsdUpdate = calculateUsdValue(AssetIn, AmountIn, AssetInBalance)
+    let assetOutFinalParams = (
+      newBalanceOut,
+      assetOutFactBalance - AmountOut,
+      assetOutParams._3,
+      assetOutParams._4,
+      assetOutParams._5,
+      assetOutSelloffData._1,
+      assetOutSelloffData._2,
+      assetOutSelloffData._3
+    )
+
+    let assetInChange = saveGlobalTokenParams(assetIn, assetInFinalParams)
+    let assetOutChange = saveGlobalTokenParams(assetOut, assetOutFinalParams)
+
+    let feeAssetStr = tryGetString("static_feeToken")
+    let feeAssetParams = loadGlobalTokenParams(feeAssetStr)
+    let feeTokenBalance = feeAssetParams._1
+    let volumeUsdUpdate = calculateUsdValue(AssetIn, AmountIn, AssetInBalance, feeTokenBalance)
 
     (
       [
         # change state with new balance values
-        assetOutChange,
         assetInChange,
-        assetInFactChange,
-        assetOutFactChange,
+        assetOutChange,
 
         # send amountOut to the user
         ScriptTransfer(i.caller, AmountOut, AssetOut),
@@ -1025,19 +1201,9 @@ func swap(assetOut: String, minimum: Int) = {
         IntegerEntry("global_volume_usd", tryGetInteger("global_volume_usd") + volumeUsdUpdate),
 
         # send platform fee
-        ScriptTransfer(feesAddress, protocolFee, assetIn.getAssetBytes()),
+        ScriptTransfer(feesAddress, protocolFee, assetIn.getAssetBytes())
 
-        # account LP fee
-        interestChange,
-
-        # stats update
-        statsChange
-      ] ++ 
-        # selloff update, CAN THROW ERROR
-        updSelloffData(assetIn, cleanAmountIn)
-        ++
-        updSelloffData(assetOut, -AmountOut)
-
+      ]
       , AmountOut
     )
   }
@@ -1055,8 +1221,17 @@ func swapReadOnly(assetIn: String, assetOut: String, AmountIn: Int) = {
   let feeAssetOut = if (feeAssetOutStr == "") then {usdnAssetId} else {feeAssetOutStr.getAssetBytes()}
   
   # markup all asset numbers
-  let AssetInBalance = tryGetInteger("global_"+AssetIn.getAssetString()+"_balance")
-  let AssetOutBalance = tryGetInteger("global_"+assetOut+"_balance")
+  let assetInParams = loadGlobalTokenParams(AssetIn.getAssetString())
+  let assetOutParams = loadGlobalTokenParams(assetOut)
+
+  let AssetInBalance = assetInParams._1
+  let AssetInFactBalance = assetInParams._2
+  let assetInFeesEarned = assetInParams._3
+  let assetInLastCheckInterest = assetInParams._4
+  
+  let AssetOutBalance = assetOutParams._1
+  let assetOutFactBalance = assetOutParams._2
+
   let AssetInBalanceScaled = AssetInBalance * scaleIn
   let AssetOutBalanceScaled = AssetOutBalance * scaleOut
   let feeAmountIn = fraction(AmountIn, Fee, FeeScale)
@@ -1069,19 +1244,19 @@ func swapReadOnly(assetIn: String, assetOut: String, AmountIn: Int) = {
   let AssetOutBalance2 = AssetOutBalance - AmountOut
   let AssetInBalance2 = AssetInBalance + cleanAmountIn
 
-  let feeAssetOutBalance = 
-                            if (feeAssetOut == AssetIn) then {AssetInBalance2} 
-                            else if (feeAssetOut == AssetOut) then {AssetOutBalance2} 
-                            else {tryGetInteger("global_"+feeAssetOut.getAssetString()+"_balance")}
+  # let feeAssetOutBalance = 
+  #                           if (feeAssetOut == AssetIn) then {AssetInBalance2} 
+  #                           else if (feeAssetOut == AssetOut) then {AssetOutBalance2} 
+  #                           else {tryGetInteger("global_"+feeAssetOut.getAssetString()+"_balance")}
     
-  let feeAmountOut = calculateOutAmount(feeAmountIn, AssetIn, feeAssetOut, AssetInBalance, feeAssetOutBalance)
+  # let feeAmountOut = calculateOutAmount(feeAmountIn, AssetIn, feeAssetOut, AssetInBalance, feeAssetOutBalance)
 
   # do all the verifications
   # TODO: verification that realPrice <= marketPrice (just in case)
   if (AssetOut == AssetIn) then {
     throw("this swap is not allowed")
   }
-  else if (getFactBalance(assetOut) - AmountOut < 0) then {
+  else if (assetOutParams._2 - AmountOut < 0) then {
     throw("contract is out of reserves")
   }
   else if (isShutdown()) then {
