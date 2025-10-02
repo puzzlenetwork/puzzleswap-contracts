@@ -5,7 +5,7 @@
 # TODO
 # indefinite ranges
 
-let VERSION = "PZ-3.6.1 PROD-refactor"
+let VERSION = "PZ-3.7.0 PROD"
 
 # may be better 
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
@@ -19,8 +19,10 @@ let CONFIG_ADDRESS = if (configStr == "") then {
 let AssetsWeightsDecimals = 4
 let Scale = 10000
 let Scale8 = 100000000
+let Scale8_BI = toBigInt(Scale8)
 let Scale12 = 1000000000000
 let Scale16 = 10000000000000000
+let Scale16_BI = toBigInt(Scale16)
 let FeeScale = 10000
 let PoolTokenDecimals = 8
 let PoolTokenScale = pow(10, 0, PoolTokenDecimals, 0, 0, HALFUP)
@@ -307,7 +309,11 @@ func calculateUsdValue(assetId: ByteVector|Unit, amount: Int, aBalance: Int, fee
   let feeAssetScale = getIntegerValue(this, "static_"+feeAssetStr+"_scale")
   let feeAssetNum = assetIds.indexOf(feeAssetStr.getAssetBytes()).value()
   let feeAssetWeight = AssetsWeights[feeAssetNum]
-  let valInFeeAsset = fraction( amount, feeAssetBalance / feeAssetWeight, aBalance / assetWeight )
+  # let valInFeeAsset = fraction( amount, feeAssetBalance  / feeAssetWeight, aBalance / assetWeight )
+  let _amount = amount.toBigInt() * Scale8_BI
+  let _feeAssetData = feeAssetBalance.toBigInt() / feeAssetWeight.toBigInt()
+  let _assetData = fraction(aBalance.toBigInt(), Scale8_BI, assetWeight.toBigInt())
+  let valInFeeAsset = fraction( _amount, _feeAssetData, _assetData ).toInt()
 
   let feeAssetPrice = getPriceFromOracle(feeAssetStr)
 
