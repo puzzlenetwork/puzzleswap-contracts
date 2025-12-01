@@ -5,15 +5,18 @@
 # TODO
 # indefinite ranges
 
-let VERSION = "PZ-3.7.0 PROD"
+let VERSION = "PZ-3.8.0 PROD"
+let CONTRACT_TYPE = "RANGED_POOL"
 
 # may be better 
+### Load config
 let configStr = getString(this, "configAddress").valueOrElse("3PMoEibdLeWqcURQ8351XhaWwyacDc7G4e5")
 let CONFIG_ADDRESS = if (configStr == "") then {
   this
 } else {
   Address(fromBase58String(configStr))
 }
+###
 
 ## CONSTANTS ##
 let AssetsWeightsDecimals = 4
@@ -97,6 +100,7 @@ func parstStrToIntList(s: String) = {
 
 
 ## CONFIG ##
+### Load config
 let usdnAssetIdStr = getString(CONFIG_ADDRESS, "usdnAssetIdStr").valueOrElse("DG2xFkPdDwKUoBkzGAhQtLpSGzfXLiCYPEzeKH2Ad24p")
 let puzzleAssetIdStr = getString(CONFIG_ADDRESS, "puzzleAssetIdStr").valueOrElse("HEB8Qaw9xrWpWs8tHsiATYGBWDBtP2S7kcPALrMu43AS")
 let usdtAssetIdStr = getString(CONFIG_ADDRESS,  "usdtAssetIdStr").valueOrElse("34N9YcEETLWn93qYQ64EsP1x89tSruJU44RrEMSXXEPJ")
@@ -125,7 +129,7 @@ let shutdownAddressStr = getString(CONFIG_ADDRESS, "shutdownAddress").valueOrEls
 let layer2Addresses = getString(CONFIG_ADDRESS, "layer2Addresses").valueOrElse("3PR1Qvi9mHT35SwWEkLSqqE2L8thiPLdVWU,3PQoBfUKHkJAeGWhooLP7WS8ovb54av9Jp2")
 let govAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "govAddress").valueOrElse("3P6uro9xCsE8te78QZjzqy7aq8natSzdceC")))
 let coldMasterAddress = Address(fromBase58String(getString(CONFIG_ADDRESS, "coldMasterAddress").valueOrElse("3PK9nhPfPbMBygB9ZgHVMHaQbSoojwrBfxj")))
-
+###
 
 ## GLOBAL VARIABLES ##
 let T = tryGetInteger("static_tokensAmount")
@@ -1293,4 +1297,27 @@ func setFee(newFee: Int) = {
 }
 
 @Verifier(tx)
-func verify() = sigVerify(tx.bodyBytes, tx.proofs[0], masterPubKey)
+func verify() = {
+  let multisigStr = getString("APPROVER_ADDRESS").valueOrElse("")
+  let multisigAddress = addressFromString(multisigStr)
+  let multisigOk = match (multisigAddress) {
+      case t:Address => true
+      case _ => false
+    }
+
+  if (multisigOk) then { # verify with multisig
+    match tx {
+      case ttx:SetScriptTransaction => {
+        let scriptHasha = blake2b256(ttx.script.value()).value().toBase58String()
+        let validFrom = getInteger(multisigAddress.value(), "script_" + CONTRACT_TYPE + "_" + scriptHasha + "_validFrom").valueOrErrorMessage("validFrom not set")
+        let validTo = getInteger(multisigAddress.value(), "script_" + CONTRACT_TYPE + "_" + scriptHasha + "_validTo").valueOrErrorMessage("validTo not set")
+        height >= validFrom && height <= validTo
+      }
+      case otx => {
+        getBoolean(multisigAddress.value(), this.toString() + "_" + toBase58String(otx.id) + "__approved").valueOrElse(false)
+      }
+    } 
+  } else { # verify with default method for given contract
+    sigVerify(tx.bodyBytes, tx.proofs[0], masterPubKey)
+  }
+}
