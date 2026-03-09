@@ -2,9 +2,20 @@
 {-# SCRIPT_TYPE ACCOUNT #-}
 {-# CONTENT_TYPE DAPP #-}
 
-let aggregator = "3PGFHzVGT4NTigwCKP1NcwoXkodVZwvBuuU"
-let proxyAddressStr = "3PMcMiMEs6w56NRGacksXtFG5zS7doE9fpL"
+let VERSION = "LIMITS-1.0.2 PROD"
+let CONTRACT_TYPE = "LIMIT_ORDERS"
 
+
+### Load config
+let configStr = getString(this, "setup_configAddress").valueOrElse("")
+let CONFIG_ADDRESS = if (configStr == "") then {
+  this
+} else {
+  Address(fromBase58String(configStr))
+}
+###
+
+### HELPERS ###
 func tryGetString (key: String) = match getString(this, key) {
     case b: String => b
     case _ => ""
@@ -20,49 +31,174 @@ func getAssetString (assetId: ByteVector|Unit) = match assetId {
     case _ => "WAVES"
 }
 
-func getAssetBytes (assetIdStr: String) = if ((assetIdStr == "WAVES"))
-    then unit
-    else fromBase58String(assetIdStr)
+func getAssetBytes (assetIdStr: String) = {
+  if ((assetIdStr == "WAVES"))
+  then unit
+  else fromBase58String(assetIdStr)
+}
 
 func getDappBalance (assetId: ByteVector|Unit) = match assetId {
-    case b: ByteVector => assetBalance(this, b)
-    case _ => wavesBalance(this).available
+  case b: ByteVector => assetBalance(this, b)
+  case _ => wavesBalance(this).available
+}
+
+func getNodeAddress() = {
+  let nodeAddressStr = getString(this, "wavesLease_nodeAddress").valueOrElse("")
+  if (nodeAddressStr == "") then unit
+  else addressFromString(nodeAddressStr)
+}
+
+let aggregator = getString(CONFIG_ADDRESS, "setup_aggregatorAddress").valueOrElse("3PGFHzVGT4NTigwCKP1NcwoXkodVZwvBuuU")
+let adminAddressStr = getString(this, "setup_adminAddress").valueOrElse("3PMcMiMEs6w56NRGacksXtFG5zS7doE9fpL")
+let WAVES_RESERVE = 50000000
+
+
+func isAdmin(caller: Address) = {
+  toBase58String(caller.bytes) == adminAddressStr
+}
+
+func rebalanceLeaseActions(wavesOut: Int, nodeAddr: Address|Unit) = {
+  let currentLeaseId = tryGetString("wavesLease_lastId")
+  let cancelActions = if (currentLeaseId != "") then [
+    LeaseCancel(fromBase58String(currentLeaseId)),
+    DeleteEntry("wavesLease_lastId"),
+    DeleteEntry("wavesLease_amount")
+  ] else []
+
+  let newLeaseActions = match nodeAddr {
+    case node: Address => {
+      let newLeaseAmount = wavesBalance(this).regular - wavesOut - WAVES_RESERVE
+      if (newLeaseAmount > 0) then {
+        let leaseAct = Lease(node, newLeaseAmount)
+        [
+          leaseAct,
+          StringEntry("wavesLease_lastId", toBase58String(calculateLeaseId(leaseAct))),
+          IntegerEntry("wavesLease_amount", newLeaseAmount)
+        ]
+      } else []
+    }
+    case _ => []
+  }
+
+  cancelActions ++ newLeaseActions
 }
 
 
+### ADMIN CALLABLES ###
+### ATTENTION! All set functions MUST be called only by the contract itself. This is done to prevent direct calls from users and allow multisig verification in the verify function.
+@Callable(i)
+func setApproverAddress(approverAddress: String) = {
+  # Allows empty string as address to disable approver contract, but if address is set it must be correct and have multisig initialized with admins
+  strict isSelf = if (i.caller == this) then true else throw("Only self invoke")
+  let _approverAddress = addressFromString(approverAddress)
+  let approverOk = match (_approverAddress) {
+      case t:Address => true
+      case _ => false
+    }
+  strict canSetApprover = if (approverOk || approverAddress == "") then true else throw("Wrong approver address")
+  let isInited = getBoolean(_approverAddress.value(), "INITED").valueOrElse(false)
+  let hasAdmins = getString(_approverAddress.value(), "ADMINS_PBKS").valueOrElse("") != ""
+  strict isApproverContract = if (approverAddress == "" || isInited && hasAdmins) then true else throw("Address is not approver contract")
+  [StringEntry("APPROVER_ADDRESS", approverAddress)]
+}
+
+@Callable(i)
+func setNodeAddress(nodeAddress: String) = {
+  strict isSelf = if (i.caller == this) then true else throw("Only self invoke")
+  let _nodeAddress = addressFromString(nodeAddress)
+  let nodeOk = match (_nodeAddress) {
+      case t:Address => true
+      case _ => false
+    }
+  strict canSetNode = if (nodeOk || nodeAddress == "") then true else throw("Wrong node address")
+  let newNodeAddr = if (nodeAddress != "") then addressFromStringValue(nodeAddress) else unit
+  let leaseActions = rebalanceLeaseActions(0, newNodeAddr)
+  [StringEntry("wavesLease_nodeAddress", nodeAddress)] ++ leaseActions
+}
+
+@Callable(i)
+func setAdminAddress(adminAddress: String) = {
+  # Admin has permissions to cancel any order
+  strict isSelf = if (i.caller == this) then true else throw("Only self invoke")
+  let _adminAddress = addressFromString(adminAddress)
+  let adminOk = match (_adminAddress) {
+      case t:Address => true
+      case _ => false
+    }
+  strict canSetAdmin = if (adminOk || adminAddress == "") then true else throw("Wrong admin address")
+  [StringEntry("setup_adminAddress", adminAddress)]
+}
+
+@Callable(i)
+func setConfigAddress(configAddress: String) = {
+  strict isSelf = if (i.caller == this) then true else throw("Only self invoke")
+  let _configAddress = addressFromString(configAddress)
+  let configOk = match (_configAddress) {
+      case t:Address => true
+      case _ => false
+    }
+  strict canSetConfig = if (configOk || configAddress == "") then true else throw("Wrong config address")
+  [StringEntry("setup_configAddress", configAddress)]
+}
+
+@Callable(i)
+func withdrawFunds(tokenId: String, receiver: String) = {
+  # Emergency withdraw function, allows admin to withdraw funds from the contract.
+  # Consider to remove after successful migration
+  strict _adminCheck = if (isAdmin(i.caller)) then true else throw("Only admin")
+  strict receiverAddress = addressFromStringValue(receiver)
+  let assetBytes = getAssetBytes(tokenId)
+  let leaseActions = if (tokenId == "WAVES") then {
+    let currentLeaseId = tryGetString("wavesLease_lastId")
+    if (currentLeaseId != "") then [
+      LeaseCancel(fromBase58String(currentLeaseId)),
+      DeleteEntry("wavesLease_lastId"),
+      DeleteEntry("wavesLease_amount")
+    ] else []
+  } else []
+  let amount = if (tokenId == "WAVES") then wavesBalance(this).regular else getDappBalance(assetBytes)
+  if (amount > 0) then {
+    leaseActions ++ [ScriptTransfer(receiverAddress, amount, assetBytes)]
+  } else {
+    leaseActions
+  }
+}
+
+### USER CALLABLES ###
 @Callable(i)
 func createOrder (asset1: String, amount1: Int) = {
-    let newOrdersAmount = (tryGetInteger("global_ordersAmount") + 1)
-    let orderId = toString(newOrdersAmount)
-    if (size(i.payments) != 1) then throw("You have to provide payment")
-    else if (0 >= amount1) then throw("Amount1 cannot be less or equals 0")
-      else {
-        let asset0 = getAssetString(i.payments[0].assetId)
-        let amount0 = i.payments[0].amount
-        let userOrders = tryGetString((("user_" + toString(i.caller)) + "_orders"))
-        let newUserOrders =                 match userOrders {
-          case "" => orderId
-          case _ => userOrders + "," + orderId
-        }
-
-        [
-          IntegerEntry("global_ordersAmount", newOrdersAmount), 
-          StringEntry("order_" + orderId + "_token0", asset0), 
-          IntegerEntry("order_" + orderId + "_amount0", amount0), 
-          IntegerEntry("order_" + orderId + "_amount1", amount1), 
-          StringEntry("order_" + orderId + "_token1", asset1), 
-          IntegerEntry("order_" + orderId + "_fulfilled0", 0), 
-          IntegerEntry("order_" + orderId + "_fulfilled1", 0), 
-          StringEntry("order_" + orderId + "_owner", toString(i.caller)), 
-          StringEntry("order_" + orderId + "_status", "active"), 
-          IntegerEntry("order_" + orderId + "_timestamp", lastBlock.timestamp), 
-          StringEntry("order_" + orderId + "_txId", toBase58String(i.transactionId)), 
-          StringEntry("user_" + toString(i.caller) + "_orders", newUserOrders)
-        ]
+  let newOrdersAmount = (tryGetInteger("global_ordersAmount") + 1)
+  let orderId = toString(newOrdersAmount)
+  if (size(i.payments) != 1) then throw("You have to provide payment")
+  else if (0 >= amount1) then throw("Amount1 cannot be less or equals 0")
+    else {
+      let asset0 = getAssetString(i.payments[0].assetId)
+      let amount0 = i.payments[0].amount
+      strict _sameAssetCheck = if (asset0 == asset1) then throw("Cannot create order with same assets") else true
+      let userOrders = tryGetString((("user_" + toString(i.caller)) + "_orders"))
+      let newUserOrders =                 match userOrders {
+        case "" => orderId
+        case _ => userOrders + "," + orderId
       }
+
+      let orderActions = [
+        IntegerEntry("global_ordersAmount", newOrdersAmount), 
+        StringEntry("order_" + orderId + "_token0", asset0), 
+        IntegerEntry("order_" + orderId + "_amount0", amount0), 
+        IntegerEntry("order_" + orderId + "_amount1", amount1), 
+        StringEntry("order_" + orderId + "_token1", asset1), 
+        IntegerEntry("order_" + orderId + "_fulfilled0", 0), 
+        IntegerEntry("order_" + orderId + "_fulfilled1", 0), 
+        StringEntry("order_" + orderId + "_owner", toString(i.caller)), 
+        StringEntry("order_" + orderId + "_status", "active"), 
+        IntegerEntry("order_" + orderId + "_timestamp", lastBlock.timestamp), 
+        StringEntry("order_" + orderId + "_txId", toBase58String(i.transactionId)), 
+        StringEntry("user_" + toString(i.caller) + "_orders", newUserOrders)
+      ]
+      let leaseActions = if (asset0 == "WAVES") then rebalanceLeaseActions(0, getNodeAddress()) else []
+      orderActions ++ leaseActions
     }
-
-
+}
 
 @Callable(i)
 func fulfillOrder (orderId: String) = {
@@ -85,20 +221,29 @@ func fulfillOrder (orderId: String) = {
       let paymentAsset1 = getAssetString(i.payments[0].assetId)
       let paymentAmount1 = i.payments[0].amount
 
+      let wavesInvolved = (orderAsset0 == "WAVES" || orderAsset1 == "WAVES")
       if (paymentAsset1 != orderAsset1) then throw("Wrong payment asset")
       else if ((paymentAmount1 >= orderAmount1Left))
-        then [
-          ScriptTransfer(callerAddress, (paymentAmount1 - orderAmount1Left), getAssetBytes(orderAsset1)), 
-          ScriptTransfer(callerAddress, orderAmount0Left, getAssetBytes(orderAsset0)), 
-          ScriptTransfer(ownerAddress, orderAmount1Left, getAssetBytes(paymentAsset1)), 
-          IntegerEntry((("order_" + orderId) + "_fulfilled0"), (orderFulfilled0 + orderAmount0Left)), 
-          IntegerEntry((("order_" + orderId) + "_fulfilled1"), (orderFulfilled1 + orderAmount1Left)), 
-          StringEntry((("order_" + orderId) + "_status"), "closed")
-        ]
+        then {
+          let wavesOut = (if (orderAsset0 == "WAVES") then orderAmount0Left else 0)
+                       + (if (orderAsset1 == "WAVES") then paymentAmount1 else 0)
+          let leaseActions = if (wavesInvolved) then rebalanceLeaseActions(wavesOut, getNodeAddress()) else []
+          let refundActions = if (paymentAmount1 > orderAmount1Left) then [ScriptTransfer(callerAddress, (paymentAmount1 - orderAmount1Left), getAssetBytes(orderAsset1))] else []
+          leaseActions ++ refundActions ++ [
+            ScriptTransfer(callerAddress, orderAmount0Left, getAssetBytes(orderAsset0)), 
+            ScriptTransfer(ownerAddress, orderAmount1Left, getAssetBytes(paymentAsset1)), 
+            IntegerEntry((("order_" + orderId) + "_fulfilled0"), (orderFulfilled0 + orderAmount0Left)), 
+            IntegerEntry((("order_" + orderId) + "_fulfilled1"), (orderFulfilled1 + orderAmount1Left)), 
+            StringEntry((("order_" + orderId) + "_status"), "closed")
+          ]
+        }
         else {
           let amount0 = fraction(orderAmount0, paymentAmount1, orderAmount1, FLOOR)
-          
-          [
+          strict _nonZeroFill = if (amount0 == 0) then throw("Fill amount too small") else true
+          let wavesOut = (if (orderAsset0 == "WAVES") then amount0 else 0)
+                       + (if (orderAsset1 == "WAVES") then paymentAmount1 else 0)
+          let leaseActions = if (wavesInvolved) then rebalanceLeaseActions(wavesOut, getNodeAddress()) else []
+          leaseActions ++ [
             ScriptTransfer(ownerAddress, paymentAmount1, getAssetBytes(paymentAsset1)), 
             ScriptTransfer(callerAddress, amount0, getAssetBytes(orderAsset0)), 
             IntegerEntry((("order_" + orderId) + "_fulfilled0"), (orderFulfilled0 + amount0)), 
@@ -106,8 +251,7 @@ func fulfillOrder (orderId: String) = {
           ]
         }
       }
-    }
-
+}
 
 @Callable(i)
 func fulfillOrderAndSwapCashback (orderId: String,params: String,minToReceive: Int) = {
@@ -138,7 +282,11 @@ func fulfillOrderAndSwapCashback (orderId: String,params: String,minToReceive: I
           strict swapTx = invoke(aggregatorAddress, "swap", [params, minToReceive], [AttachedPayment(getAssetBytes(orderAsset1), cashbackAmount)])
           strict balanceAfter = getDappBalance(getAssetBytes(orderAsset0))
           strict cashback = (balanceAfter - balanceBefore)
-          [
+          let wavesInvolved = (orderAsset0 == "WAVES" || paymentAsset1 == "WAVES")
+          let wavesOut = (if (orderAsset0 == "WAVES") then (orderAmount0Left + cashback) else 0)
+                       + (if (paymentAsset1 == "WAVES") then orderAmount1Left else 0)
+          let leaseActions = if (wavesInvolved) then rebalanceLeaseActions(wavesOut, getNodeAddress()) else []
+          leaseActions ++ [
             ScriptTransfer(callerAddress, orderAmount0Left, getAssetBytes(orderAsset0)), 
             ScriptTransfer(callerAddress, cashback, getAssetBytes(orderAsset0)), 
             ScriptTransfer(ownerAddress, orderAmount1Left, getAssetBytes(paymentAsset1)), 
@@ -148,8 +296,7 @@ func fulfillOrderAndSwapCashback (orderId: String,params: String,minToReceive: I
           ]
         }
       }
-    }
-
+}
 
 @Callable(i)
 func cancelOrder (orderId: String, proxyCaller:String) = {
@@ -159,14 +306,47 @@ func cancelOrder (orderId: String, proxyCaller:String) = {
     let orderAmount0 = valueOrErrorMessage(getInteger((("order_" + orderId) + "_amount0")), "Cannot find amount0")
     let orderFulfilled0 = valueOrErrorMessage(getInteger((("order_" + orderId) + "_fulfilled0")), "Cannot find fulfilled0")
     let orderAmount0Left = (orderAmount0 - orderFulfilled0)
-    if (toBase58String(i.caller.bytes) != orderOwner && toBase58String(i.caller.bytes) != proxyAddressStr) then throw("You cannot cancel order")
+    if (toBase58String(i.caller.bytes) != orderOwner && toBase58String(i.caller.bytes) != adminAddressStr) then throw("You cannot cancel order")
     else if ((orderStatus != "active")) then throw("order is closed or canceled")
-    else [
-      ScriptTransfer(addressFromStringValue(orderOwner), orderAmount0Left, getAssetBytes(orderAsset0)), 
-      StringEntry((("order_" + orderId) + "_status"), "canceled")
-    ]
+    else {
+      let wavesOut = if (orderAsset0 == "WAVES") then orderAmount0Left else 0
+      let leaseActions = if (orderAsset0 == "WAVES") then rebalanceLeaseActions(wavesOut, getNodeAddress()) else []
+      leaseActions ++ [
+        ScriptTransfer(addressFromStringValue(orderOwner), orderAmount0Left, getAssetBytes(orderAsset0)), 
+        StringEntry((("order_" + orderId) + "_status"), "canceled")
+      ]
+    }
 }
 
-
 @Verifier(tx)
-func verify () = sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
+func verify() = {
+  let multisigStr = getString("APPROVER_ADDRESS").valueOrElse("")
+  let multisigAddress = addressFromString(multisigStr)
+  let multisigOk = match (multisigAddress) {
+      case t:Address => true
+      case _ => false
+    }
+
+  if (multisigOk) then { # verify with multisig
+    match tx {
+      case ttx:SetScriptTransaction => {
+        match ttx.script {
+          case script: ByteVector =>
+            let scriptHasha = blake2b256(script).toBase58String()
+            let validFrom = getInteger(multisigAddress.value(), "script%%" + CONTRACT_TYPE + "%%" + scriptHasha + "%%validFrom").valueOrErrorMessage("validFrom not set")
+            let validTo = getInteger(multisigAddress.value(), "script%%" + CONTRACT_TYPE + "%%" + scriptHasha + "%%validTo").valueOrErrorMessage("validTo not set")
+            height >= validFrom && height <= validTo
+          case _ => false  # Reject SetScript(null) explicitly
+        }
+      }
+      case otx => {
+        let taskId = "tx_" + this.toString() + "_" + toBase58String(otx.id)
+        let isApproved = getBoolean(multisigAddress.value(), this.toString() + "_" + toBase58String(otx.id) + "__approved").valueOrElse(false)
+        let approvedFrom = getInteger(multisigAddress.value(), taskId + "__approvedFrom").valueOrElse(0)
+        isApproved && height >= approvedFrom
+      }
+    } 
+  } else { # verify with default method for given contract
+    sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
+  }
+}
