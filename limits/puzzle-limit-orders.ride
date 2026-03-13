@@ -2,7 +2,13 @@
 {-# SCRIPT_TYPE ACCOUNT #-}
 {-# CONTENT_TYPE DAPP #-}
 
-let VERSION = "LIMITS-1.0.2 PROD"
+## CHANGES:
+# 1) Removed unlease/lease cycle if token, sending to contract is WAVES, because it passes to owner 
+# immediately and caused "leaseID already in state" error if there were several such orders in one tx.
+# 2) Reordered lease/unlease actions in rebalance method to remove unnecessary data writes
+# 3) Added global shutdown check to all user callables
+
+let VERSION = "LIMITS-1.0.3 PROD"
 let CONTRACT_TYPE = "LIMIT_ORDERS"
 
 
@@ -50,6 +56,7 @@ func getNodeAddress() = {
 
 let aggregator = getString(CONFIG_ADDRESS, "setup_aggregatorAddress").valueOrElse("3PGFHzVGT4NTigwCKP1NcwoXkodVZwvBuuU")
 let adminAddressStr = getString(this, "setup_adminAddress").valueOrElse("3PMcMiMEs6w56NRGacksXtFG5zS7doE9fpL")
+let shutdownAddressStr = getString(CONFIG_ADDRESS, "shutdownAddress").valueOrElse("3PEpv9hRFWEEBU22WRnLsw1bH4YGtcU728o")
 let WAVES_RESERVE = 50000000
 
 
@@ -57,30 +64,44 @@ func isAdmin(caller: Address) = {
   toBase58String(caller.bytes) == adminAddressStr
 }
 
+func isShutdown() = {
+  let shutdownAddress = addressFromString(shutdownAddressStr)
+  if shutdownAddress == unit then {false} else {
+    match getBoolean(shutdownAddress.value(), "is_shutdown") {
+      case x: Boolean => x
+      case _ => false
+    }
+  }
+}
+
 func rebalanceLeaseActions(wavesOut: Int, nodeAddr: Address|Unit) = {
   let currentLeaseId = tryGetString("wavesLease_lastId")
-  let cancelActions = if (currentLeaseId != "") then [
-    LeaseCancel(fromBase58String(currentLeaseId)),
-    DeleteEntry("wavesLease_lastId"),
-    DeleteEntry("wavesLease_amount")
-  ] else []
+  let cancelLeaseAction = if (currentLeaseId != "") then [LeaseCancel(fromBase58String(currentLeaseId))] else []
 
-  let newLeaseActions = match nodeAddr {
+  match nodeAddr {
     case node: Address => {
       let newLeaseAmount = wavesBalance(this).regular - wavesOut - WAVES_RESERVE
       if (newLeaseAmount > 0) then {
-        let leaseAct = Lease(node, newLeaseAmount)
-        [
-          leaseAct,
-          StringEntry("wavesLease_lastId", toBase58String(calculateLeaseId(leaseAct))),
+        let leaseAction = Lease(node, newLeaseAmount)
+        cancelLeaseAction ++ [
+          leaseAction,
+          StringEntry("wavesLease_lastId", toBase58String(calculateLeaseId(leaseAction))),
           IntegerEntry("wavesLease_amount", newLeaseAmount)
         ]
-      } else []
+      } else {
+        cancelLeaseAction ++ (if (currentLeaseId != "") then [
+          DeleteEntry("wavesLease_lastId"),
+          DeleteEntry("wavesLease_amount")
+        ] else [])
+      }
     }
-    case _ => []
+    case _ => {
+      cancelLeaseAction ++ (if (currentLeaseId != "") then [
+        DeleteEntry("wavesLease_lastId"),
+        DeleteEntry("wavesLease_amount")
+      ] else [])
+    }
   }
-
-  cancelActions ++ newLeaseActions
 }
 
 
@@ -167,6 +188,7 @@ func withdrawFunds(tokenId: String, receiver: String) = {
 ### USER CALLABLES ###
 @Callable(i)
 func createOrder (asset1: String, amount1: Int) = {
+  strict isNotShutdown = if (!isShutdown()) then true else throw("Contract is shutdown")
   let newOrdersAmount = (tryGetInteger("global_ordersAmount") + 1)
   let orderId = toString(newOrdersAmount)
   if (size(i.payments) != 1) then throw("You have to provide payment")
@@ -202,6 +224,7 @@ func createOrder (asset1: String, amount1: Int) = {
 
 @Callable(i)
 func fulfillOrder (orderId: String) = {
+    strict isNotShutdown = if (!isShutdown()) then true else throw("Contract is shutdown")
     let orderOwner = valueOrErrorMessage(getString((("order_" + orderId) + "_owner")), "Cannot find order owner")
     let orderStatus = getString((("order_" + orderId) + "_status"))
     let orderAsset0 = valueOrErrorMessage(getString((("order_" + orderId) + "_token0")), "Cannot find token0")
@@ -221,7 +244,7 @@ func fulfillOrder (orderId: String) = {
       let paymentAsset1 = getAssetString(i.payments[0].assetId)
       let paymentAmount1 = i.payments[0].amount
 
-      let wavesInvolved = (orderAsset0 == "WAVES" || orderAsset1 == "WAVES")
+      let wavesInvolved = (orderAsset0 == "WAVES")
       if (paymentAsset1 != orderAsset1) then throw("Wrong payment asset")
       else if ((paymentAmount1 >= orderAmount1Left))
         then {
@@ -255,6 +278,7 @@ func fulfillOrder (orderId: String) = {
 
 @Callable(i)
 func fulfillOrderAndSwapCashback (orderId: String,params: String,minToReceive: Int) = {
+    strict isNotShutdown = if (!isShutdown()) then true else throw("Contract is shutdown")
     let orderOwner = valueOrErrorMessage(getString((("order_" + orderId) + "_owner")), "Cannot find order owner")
     let orderStatus = getString((("order_" + orderId) + "_status"))
     let orderAsset0 = valueOrErrorMessage(getString((("order_" + orderId) + "_token0")), "Cannot find token0")
@@ -282,7 +306,7 @@ func fulfillOrderAndSwapCashback (orderId: String,params: String,minToReceive: I
           strict swapTx = invoke(aggregatorAddress, "swap", [params, minToReceive], [AttachedPayment(getAssetBytes(orderAsset1), cashbackAmount)])
           strict balanceAfter = getDappBalance(getAssetBytes(orderAsset0))
           strict cashback = (balanceAfter - balanceBefore)
-          let wavesInvolved = (orderAsset0 == "WAVES" || paymentAsset1 == "WAVES")
+          let wavesInvolved = (orderAsset0 == "WAVES")
           let wavesOut = (if (orderAsset0 == "WAVES") then (orderAmount0Left + cashback) else 0)
                        + (if (paymentAsset1 == "WAVES") then orderAmount1Left else 0)
           let leaseActions = if (wavesInvolved) then rebalanceLeaseActions(wavesOut, getNodeAddress()) else []
@@ -300,6 +324,7 @@ func fulfillOrderAndSwapCashback (orderId: String,params: String,minToReceive: I
 
 @Callable(i)
 func cancelOrder (orderId: String, proxyCaller:String) = {
+    strict isNotShutdown = if (!isShutdown()) then true else throw("Contract is shutdown")
     let orderOwner = valueOrErrorMessage(getString((("order_" + orderId) + "_owner")), "Cannot find order owner")
     let orderStatus = getString((("order_" + orderId) + "_status"))
     let orderAsset0 = valueOrErrorMessage(getString((("order_" + orderId) + "_token0")), "Cannot find token0")
