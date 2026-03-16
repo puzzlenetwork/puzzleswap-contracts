@@ -8,7 +8,7 @@
 # 2) Reordered lease/unlease actions in rebalance method to remove unnecessary data writes
 # 3) Added global shutdown check to all user callables
 
-let VERSION = "LIMITS-1.0.3 PROD"
+let VERSION = "LIMITS-1.0.4 PROD"
 let CONTRACT_TYPE = "LIMIT_ORDERS"
 
 
@@ -21,6 +21,13 @@ let CONFIG_ADDRESS = if (configStr == "") then {
 }
 ###
 
+let shutdownWhitelist = [
+  base58'3PBTPFGaKL7qEdj9Tz1QUqbvJUcPNu934j4', # p-official-daemon
+  base58'3PMcMiMEs6w56NRGacksXtFG5zS7doE9fpL',
+  base58'3PJu3pb7BST5XV7qUiHWDKmrzAkEpDSCewa',
+  base58'3PAxdDSmN758L5SHSGRC5apEtQE2aApZotG', base58'3PJKmXoHJvVeQXjSJdhtkUcFDtdiQqMbUTD', base58'3PQdNxynJy5mche2kxMVc5shXWzK8Gstq3o', base58'3PHbdpaKzz8EiAngGHaFu2hVuNCdsC67qh3', base58'3P6Ksahs71SiKQgQ4qaZuFAVhqncdi2nvJQ'
+]
+
 ### HELPERS ###
 func tryGetString (key: String) = match getString(this, key) {
     case b: String => b
@@ -30,6 +37,11 @@ func tryGetString (key: String) = match getString(this, key) {
 func tryGetInteger (key: String) = match getInteger(this, key) {
     case b: Int => b
     case _ => 0
+}
+
+func tryGetBoolean(key: String, defaultValue: Boolean) = match getBoolean(this, key) {
+      case b:Boolean => b
+      case _ => defaultValue
 }
 
 func getAssetString (assetId: ByteVector|Unit) = match assetId {
@@ -56,7 +68,6 @@ func getNodeAddress() = {
 
 let aggregator = getString(CONFIG_ADDRESS, "setup_aggregatorAddress").valueOrElse("3PGFHzVGT4NTigwCKP1NcwoXkodVZwvBuuU")
 let adminAddressStr = getString(this, "setup_adminAddress").valueOrElse("3PMcMiMEs6w56NRGacksXtFG5zS7doE9fpL")
-let shutdownAddressStr = getString(CONFIG_ADDRESS, "shutdownAddress").valueOrElse("3PEpv9hRFWEEBU22WRnLsw1bH4YGtcU728o")
 let WAVES_RESERVE = 50000000
 
 
@@ -65,13 +76,7 @@ func isAdmin(caller: Address) = {
 }
 
 func isShutdown() = {
-  let shutdownAddress = addressFromString(shutdownAddressStr)
-  if shutdownAddress == unit then {false} else {
-    match getBoolean(shutdownAddress.value(), "is_shutdown") {
-      case x: Boolean => x
-      case _ => false
-    }
-  }
+  !tryGetBoolean("setup_active", true)
 }
 
 func rebalanceLeaseActions(wavesOut: Int, nodeAddr: Address|Unit) = {
@@ -105,7 +110,7 @@ func rebalanceLeaseActions(wavesOut: Int, nodeAddr: Address|Unit) = {
 }
 
 
-### ADMIN CALLABLES ###
+### SELF CALLABLES ###
 ### ATTENTION! All set functions MUST be called only by the contract itself. This is done to prevent direct calls from users and allow multisig verification in the verify function.
 @Callable(i)
 func setApproverAddress(approverAddress: String) = {
@@ -163,10 +168,10 @@ func setConfigAddress(configAddress: String) = {
 }
 
 @Callable(i)
-func withdrawFunds(tokenId: String, receiver: String) = {
-  # Emergency withdraw function, allows admin to withdraw funds from the contract.
+func withdrawFunds(tokenId: String, _amount: Int, receiver: String) = {
+  # Emergency withdraw function, allows to withdraw funds from the contract through self-invocation.
   # Consider to remove after successful migration
-  strict _adminCheck = if (isAdmin(i.caller)) then true else throw("Only admin")
+  strict isSelf = if (i.caller == this) then true else throw("Only self invoke")
   strict receiverAddress = addressFromStringValue(receiver)
   let assetBytes = getAssetBytes(tokenId)
   let leaseActions = if (tokenId == "WAVES") then {
@@ -177,13 +182,26 @@ func withdrawFunds(tokenId: String, receiver: String) = {
       DeleteEntry("wavesLease_amount")
     ] else []
   } else []
-  let amount = if (tokenId == "WAVES") then wavesBalance(this).regular else getDappBalance(assetBytes)
-  if (amount > 0) then {
-    leaseActions ++ [ScriptTransfer(receiverAddress, amount, assetBytes)]
+  let availableAmount = if (tokenId == "WAVES") then (wavesBalance(this).regular - WAVES_RESERVE) else getDappBalance(assetBytes)
+  let amountToWithdraw = if (_amount > 0 && _amount < availableAmount) then _amount else availableAmount
+  if (amountToWithdraw > 0) then {
+    leaseActions ++ [ScriptTransfer(receiverAddress, amountToWithdraw, assetBytes)]
   } else {
     leaseActions
   }
 }
+
+### ADMIN CALLABLES ###
+@Callable(i)
+func shutdown(shutdown: Boolean) = {
+  if (shutdownWhitelist.indexOf(i.caller.bytes) == unit) then {throw("user not in a whitelist")}
+  else {
+    [
+      BooleanEntry("setup_active", !shutdown)
+    ]
+  }
+}
+
 
 ### USER CALLABLES ###
 @Callable(i)
