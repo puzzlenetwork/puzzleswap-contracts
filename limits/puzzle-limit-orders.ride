@@ -2,7 +2,13 @@
 {-# SCRIPT_TYPE ACCOUNT #-}
 {-# CONTENT_TYPE DAPP #-}
 
-let VERSION = "LIMITS-1.0.2 PROD"
+## CHANGES:
+# 1) Removed unlease/lease cycle if token, sending to contract is WAVES, because it passes to owner 
+# immediately and caused "leaseID already in state" error if there were several such orders in one tx.
+# 2) Reordered lease/unlease actions in rebalance method to remove unnecessary data writes
+# 3) Added global shutdown check to all user callables
+
+let VERSION = "LIMITS-1.0.4 PROD"
 let CONTRACT_TYPE = "LIMIT_ORDERS"
 
 
@@ -15,6 +21,13 @@ let CONFIG_ADDRESS = if (configStr == "") then {
 }
 ###
 
+let shutdownWhitelist = [
+  base58'3PBTPFGaKL7qEdj9Tz1QUqbvJUcPNu934j4', # p-official-daemon
+  base58'3PMcMiMEs6w56NRGacksXtFG5zS7doE9fpL',
+  base58'3PJu3pb7BST5XV7qUiHWDKmrzAkEpDSCewa',
+  base58'3PAxdDSmN758L5SHSGRC5apEtQE2aApZotG', base58'3PJKmXoHJvVeQXjSJdhtkUcFDtdiQqMbUTD', base58'3PQdNxynJy5mche2kxMVc5shXWzK8Gstq3o', base58'3PHbdpaKzz8EiAngGHaFu2hVuNCdsC67qh3', base58'3P6Ksahs71SiKQgQ4qaZuFAVhqncdi2nvJQ'
+]
+
 ### HELPERS ###
 func tryGetString (key: String) = match getString(this, key) {
     case b: String => b
@@ -24,6 +37,11 @@ func tryGetString (key: String) = match getString(this, key) {
 func tryGetInteger (key: String) = match getInteger(this, key) {
     case b: Int => b
     case _ => 0
+}
+
+func tryGetBoolean(key: String, defaultValue: Boolean) = match getBoolean(this, key) {
+      case b:Boolean => b
+      case _ => defaultValue
 }
 
 func getAssetString (assetId: ByteVector|Unit) = match assetId {
@@ -57,34 +75,42 @@ func isAdmin(caller: Address) = {
   toBase58String(caller.bytes) == adminAddressStr
 }
 
+func isShutdown() = {
+  !tryGetBoolean("setup_active", true)
+}
+
 func rebalanceLeaseActions(wavesOut: Int, nodeAddr: Address|Unit) = {
   let currentLeaseId = tryGetString("wavesLease_lastId")
-  let cancelActions = if (currentLeaseId != "") then [
-    LeaseCancel(fromBase58String(currentLeaseId)),
-    DeleteEntry("wavesLease_lastId"),
-    DeleteEntry("wavesLease_amount")
-  ] else []
+  let cancelLeaseAction = if (currentLeaseId != "") then [LeaseCancel(fromBase58String(currentLeaseId))] else []
 
-  let newLeaseActions = match nodeAddr {
+  match nodeAddr {
     case node: Address => {
       let newLeaseAmount = wavesBalance(this).regular - wavesOut - WAVES_RESERVE
       if (newLeaseAmount > 0) then {
-        let leaseAct = Lease(node, newLeaseAmount)
-        [
-          leaseAct,
-          StringEntry("wavesLease_lastId", toBase58String(calculateLeaseId(leaseAct))),
+        let leaseAction = Lease(node, newLeaseAmount)
+        cancelLeaseAction ++ [
+          leaseAction,
+          StringEntry("wavesLease_lastId", toBase58String(calculateLeaseId(leaseAction))),
           IntegerEntry("wavesLease_amount", newLeaseAmount)
         ]
-      } else []
+      } else {
+        cancelLeaseAction ++ (if (currentLeaseId != "") then [
+          DeleteEntry("wavesLease_lastId"),
+          DeleteEntry("wavesLease_amount")
+        ] else [])
+      }
     }
-    case _ => []
+    case _ => {
+      cancelLeaseAction ++ (if (currentLeaseId != "") then [
+        DeleteEntry("wavesLease_lastId"),
+        DeleteEntry("wavesLease_amount")
+      ] else [])
+    }
   }
-
-  cancelActions ++ newLeaseActions
 }
 
 
-### ADMIN CALLABLES ###
+### SELF CALLABLES ###
 ### ATTENTION! All set functions MUST be called only by the contract itself. This is done to prevent direct calls from users and allow multisig verification in the verify function.
 @Callable(i)
 func setApproverAddress(approverAddress: String) = {
@@ -142,10 +168,10 @@ func setConfigAddress(configAddress: String) = {
 }
 
 @Callable(i)
-func withdrawFunds(tokenId: String, receiver: String) = {
-  # Emergency withdraw function, allows admin to withdraw funds from the contract.
+func withdrawFunds(tokenId: String, _amount: Int, receiver: String) = {
+  # Emergency withdraw function, allows to withdraw funds from the contract through self-invocation.
   # Consider to remove after successful migration
-  strict _adminCheck = if (isAdmin(i.caller)) then true else throw("Only admin")
+  strict isSelf = if (i.caller == this) then true else throw("Only self invoke")
   strict receiverAddress = addressFromStringValue(receiver)
   let assetBytes = getAssetBytes(tokenId)
   let leaseActions = if (tokenId == "WAVES") then {
@@ -156,17 +182,31 @@ func withdrawFunds(tokenId: String, receiver: String) = {
       DeleteEntry("wavesLease_amount")
     ] else []
   } else []
-  let amount = if (tokenId == "WAVES") then wavesBalance(this).regular else getDappBalance(assetBytes)
-  if (amount > 0) then {
-    leaseActions ++ [ScriptTransfer(receiverAddress, amount, assetBytes)]
+  let availableAmount = if (tokenId == "WAVES") then (wavesBalance(this).regular - WAVES_RESERVE) else getDappBalance(assetBytes)
+  let amountToWithdraw = if (_amount > 0 && _amount < availableAmount) then _amount else availableAmount
+  if (amountToWithdraw > 0) then {
+    leaseActions ++ [ScriptTransfer(receiverAddress, amountToWithdraw, assetBytes)]
   } else {
     leaseActions
   }
 }
 
+### ADMIN CALLABLES ###
+@Callable(i)
+func shutdown(shutdown: Boolean) = {
+  if (shutdownWhitelist.indexOf(i.caller.bytes) == unit) then {throw("user not in a whitelist")}
+  else {
+    [
+      BooleanEntry("setup_active", !shutdown)
+    ]
+  }
+}
+
+
 ### USER CALLABLES ###
 @Callable(i)
 func createOrder (asset1: String, amount1: Int) = {
+  strict isNotShutdown = if (!isShutdown()) then true else throw("Contract is shutdown")
   let newOrdersAmount = (tryGetInteger("global_ordersAmount") + 1)
   let orderId = toString(newOrdersAmount)
   if (size(i.payments) != 1) then throw("You have to provide payment")
@@ -202,6 +242,7 @@ func createOrder (asset1: String, amount1: Int) = {
 
 @Callable(i)
 func fulfillOrder (orderId: String) = {
+    strict isNotShutdown = if (!isShutdown()) then true else throw("Contract is shutdown")
     let orderOwner = valueOrErrorMessage(getString((("order_" + orderId) + "_owner")), "Cannot find order owner")
     let orderStatus = getString((("order_" + orderId) + "_status"))
     let orderAsset0 = valueOrErrorMessage(getString((("order_" + orderId) + "_token0")), "Cannot find token0")
@@ -221,7 +262,7 @@ func fulfillOrder (orderId: String) = {
       let paymentAsset1 = getAssetString(i.payments[0].assetId)
       let paymentAmount1 = i.payments[0].amount
 
-      let wavesInvolved = (orderAsset0 == "WAVES" || orderAsset1 == "WAVES")
+      let wavesInvolved = (orderAsset0 == "WAVES")
       if (paymentAsset1 != orderAsset1) then throw("Wrong payment asset")
       else if ((paymentAmount1 >= orderAmount1Left))
         then {
@@ -255,6 +296,7 @@ func fulfillOrder (orderId: String) = {
 
 @Callable(i)
 func fulfillOrderAndSwapCashback (orderId: String,params: String,minToReceive: Int) = {
+    strict isNotShutdown = if (!isShutdown()) then true else throw("Contract is shutdown")
     let orderOwner = valueOrErrorMessage(getString((("order_" + orderId) + "_owner")), "Cannot find order owner")
     let orderStatus = getString((("order_" + orderId) + "_status"))
     let orderAsset0 = valueOrErrorMessage(getString((("order_" + orderId) + "_token0")), "Cannot find token0")
@@ -282,7 +324,7 @@ func fulfillOrderAndSwapCashback (orderId: String,params: String,minToReceive: I
           strict swapTx = invoke(aggregatorAddress, "swap", [params, minToReceive], [AttachedPayment(getAssetBytes(orderAsset1), cashbackAmount)])
           strict balanceAfter = getDappBalance(getAssetBytes(orderAsset0))
           strict cashback = (balanceAfter - balanceBefore)
-          let wavesInvolved = (orderAsset0 == "WAVES" || paymentAsset1 == "WAVES")
+          let wavesInvolved = (orderAsset0 == "WAVES")
           let wavesOut = (if (orderAsset0 == "WAVES") then (orderAmount0Left + cashback) else 0)
                        + (if (paymentAsset1 == "WAVES") then orderAmount1Left else 0)
           let leaseActions = if (wavesInvolved) then rebalanceLeaseActions(wavesOut, getNodeAddress()) else []
@@ -300,6 +342,7 @@ func fulfillOrderAndSwapCashback (orderId: String,params: String,minToReceive: I
 
 @Callable(i)
 func cancelOrder (orderId: String, proxyCaller:String) = {
+    strict isNotShutdown = if (!isShutdown()) then true else throw("Contract is shutdown")
     let orderOwner = valueOrErrorMessage(getString((("order_" + orderId) + "_owner")), "Cannot find order owner")
     let orderStatus = getString((("order_" + orderId) + "_status"))
     let orderAsset0 = valueOrErrorMessage(getString((("order_" + orderId) + "_token0")), "Cannot find token0")
