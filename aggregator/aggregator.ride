@@ -11,6 +11,8 @@ let tsnContract = "3PKz5jnJLohF2GjShQ7bG5H4BebdoA98zZ2"
 let lendProxyContract = "3PGxMZtMnNT9pJCvXxXV4LzKqXsjvQ9XpfR"
 let pzPoolsL2Wrapper = "3PQoBfUKHkJAeGWhooLP7WS8ovb54av9Jp2"
 
+let managers = [Address(base58'3PMcMiMEs6w56NRGacksXtFG5zS7doE9fpL'), Address(base58'3PMKAL4cd77onkYuuU35115Wov1sLMEcFsv'), Address(base58'3P9xX849YJXg7C87v82cDyDy5VhKiPJpHo8'), Address(base58'3PKHFX6W4aAr1e1b8MUTz5HmdWVUcjWhgY4')]
+
 func tryGetString(key: String) = {
   match getString(this, key) {
     case b:String => b
@@ -120,6 +122,9 @@ func swapInternal(i: Invocation, routesStr: String, minToReceive: Int, refKey: S
       } else {
         invoke(pool,"swap",[t1Str, 0],[AttachedPayment(t0, amount0)])
       }
+    } else if (dAppType == "pz_ranged") then {      
+      let pool = Address(dApp.fromBase58String())
+      invoke(pool,"swap",[t1Str, 0],[AttachedPayment(t0, amount0)])
     } else if (dAppType == "wx") then {
       swapWX(t0Str, t1Str, amount0)
     } else if (dAppType == "limit") then {
@@ -169,10 +174,14 @@ func swapInternal(i: Invocation, routesStr: String, minToReceive: Int, refKey: S
     let poolAddressStr = tryGetString("static_asset_"+asset1Str+"_puzzlePool")
     if (poolAddressStr == "") then {0} else {
       strict usdnBalanceBefore = getBalance(usdnId)
-      strict convertedFee = invoke(addressFromStringValue(poolAddressStr),"swap",[usdnIdStr,0],[AttachedPayment(asset1, feeAmount)])
-      strict usdnBalanceAfter = getBalance(usdnId)
-
-      usdnBalanceAfter - usdnBalanceBefore
+      let convertedFeeEmul = invoke(addressFromStringValue(poolAddressStr),"swapReadOnly",[asset1Str, usdnIdStr,feeAmount],[])
+      if (convertedFeeEmul != 0) then {
+        strict convertedFee = invoke(addressFromStringValue(poolAddressStr),"swap",[usdnIdStr,0],[AttachedPayment(asset1, feeAmount)])
+        strict usdnBalanceAfter = getBalance(usdnId)
+        usdnBalanceAfter - usdnBalanceBefore
+      } else {
+        0
+      }
     }
   }
 
@@ -221,7 +230,7 @@ func swapWithReferral(routesStr: String, minToReceive: Int, refKey: String) = {
 
 @Callable(i)
 func addTokenPuzzlePool(assetIdStr: String, poolAddressStr: String) = {
-  if (i.caller != Address(base58'3PMcMiMEs6w56NRGacksXtFG5zS7doE9fpL')) then {throw("admin only")}
+  if (managers.indexOf(i.caller) == unit) then {throw("admin only")}
   else {
     [
       StringEntry("static_asset_"+assetIdStr+"_puzzlePool", poolAddressStr)
@@ -231,7 +240,7 @@ func addTokenPuzzlePool(assetIdStr: String, poolAddressStr: String) = {
 
 @Callable(i)
 func addReferralKey(refKey: String, addressStr: String) = {
-  if (i.caller != Address(base58'3PMcMiMEs6w56NRGacksXtFG5zS7doE9fpL')) then {throw("admin only")}
+  if (managers.indexOf(i.caller) == unit) then {throw("admin only")}
   else {
     [
       StringEntry("ref_"+refKey, addressStr)
@@ -241,7 +250,7 @@ func addReferralKey(refKey: String, addressStr: String) = {
 
 @Callable(i)
 func shutdown(val: Boolean) = {
-  if (i.caller != Address(base58'3PMcMiMEs6w56NRGacksXtFG5zS7doE9fpL')) then {throw("wl only")}
+  if (managers.indexOf(i.caller) == unit) then {throw("admin only")}
   else {
     [
       BooleanEntry("shutdown", val)
