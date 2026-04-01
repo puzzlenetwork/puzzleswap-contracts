@@ -214,7 +214,7 @@ func swapInternal(i: Invocation, routesStr: String, minToReceive: Int, refKey: S
 
   let asset0 = i.payments[0].assetId
   let amount0 = getBalance(asset0) - if( asset0 == usdnId ) then refUsdnShare else 0
-  let amount1 = cleanTotalAmount - if( asset1 == usdnId ) then refUsdnShare else 0
+  let amount1 = cleanTotalAmount
 
   [
     ScriptTransfer(i.caller, amount1, asset1)
