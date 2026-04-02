@@ -2,7 +2,8 @@
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 
-
+let VERSION = "AGGREGATOR-1.0.2 PROD"
+let CONTRACT_TYPE = "AGGREGATOR"
 
 let usdnIdStr = "DG2xFkPdDwKUoBkzGAhQtLpSGzfXLiCYPEzeKH2Ad24p"
 let usdnId = base58'DG2xFkPdDwKUoBkzGAhQtLpSGzfXLiCYPEzeKH2Ad24p'
@@ -213,7 +214,7 @@ func swapInternal(i: Invocation, routesStr: String, minToReceive: Int, refKey: S
 
   let asset0 = i.payments[0].assetId
   let amount0 = getBalance(asset0) - if( asset0 == usdnId ) then refUsdnShare else 0
-  let amount1 = cleanTotalAmount - if( asset1 == usdnId ) then refUsdnShare else 0
+  let amount1 = cleanTotalAmount
 
   [
     ScriptTransfer(i.caller, amount1, asset1)
@@ -271,6 +272,35 @@ func shutdown(val: Boolean) = {
 }
 
 
-
 @Verifier(tx)
-func verify() = sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
+func verify() = {
+  let multisigStr = getString("APPROVER_ADDRESS").valueOrElse("")
+  let multisigAddress = addressFromString(multisigStr)
+  let multisigOk = match (multisigAddress) {
+      case t:Address => true
+      case _ => false
+    }
+
+  if (multisigOk) then { # verify with multisig
+    match tx {
+      case ttx:SetScriptTransaction => {
+        match ttx.script {
+          case script: ByteVector =>
+            let scriptHasha = blake2b256(script).toBase58String()
+            let validFrom = getInteger(multisigAddress.value(), "script%%" + CONTRACT_TYPE + "%%" + scriptHasha + "%%validFrom").valueOrErrorMessage("validFrom not set")
+            let validTo = getInteger(multisigAddress.value(), "script%%" + CONTRACT_TYPE + "%%" + scriptHasha + "%%validTo").valueOrErrorMessage("validTo not set")
+            height >= validFrom && height <= validTo
+          case _ => false  # Reject SetScript(null) explicitly
+        }
+      }
+      case otx => {
+        let taskId = "tx_" + this.toString() + "_" + toBase58String(otx.id)
+        let isApproved = getBoolean(multisigAddress.value(), this.toString() + "_" + toBase58String(otx.id) + "__approved").valueOrElse(false)
+        let approvedFrom = getInteger(multisigAddress.value(), taskId + "__approvedFrom").valueOrElse(0)
+        isApproved && height >= approvedFrom
+      }
+    } 
+  } else { # verify with default method for given contract
+    sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
+  }
+}
