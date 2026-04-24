@@ -2,7 +2,7 @@
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 
-let VERSION = "AGGREGATOR-1.0.4 PROD"
+let VERSION = "AGGREGATOR-1.0.5 PROD"
 let CONTRACT_TYPE = "AGGREGATOR"
 
 let usdnIdStr = "DG2xFkPdDwKUoBkzGAhQtLpSGzfXLiCYPEzeKH2Ad24p"
@@ -132,7 +132,10 @@ func swapInternal(i: Invocation, routesStr: String, minToReceive: Int, refKey: S
 
     strict i1 = if (dAppType == "swopfi") then {
       invoke(Address(dApp.fromBase58String()),"exchange",[1],[AttachedPayment(t0, amount0)]) 
-    } else if (dAppType == "puzzle") then {
+    } else if (dAppType == "swopfi_v3") then {
+      invoke(Address(dApp.fromBase58String()), "callFunction", ["swap", ["0"]], [AttachedPayment(t0, amount0)])
+    }
+    else if (dAppType == "puzzle") then {
       let pool = Address(dApp.fromBase58String())
       let poolTokenIdBinary = getBinary(pool, "global_poolToken_id").valueOrErrorMessage("No poolToken entry in " + dApp)
       let poolTokenIdStr = getAssetString(poolTokenIdBinary)
