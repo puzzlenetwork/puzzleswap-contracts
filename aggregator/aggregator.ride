@@ -15,6 +15,7 @@ let pWavesDapp = "3PNfWAt2wdUxjJJKi7gXZTt7CgeP3QWjxAe"
 
 let managers = [Address(base58'3PMcMiMEs6w56NRGacksXtFG5zS7doE9fpL'), Address(base58'3PMKAL4cd77onkYuuU35115Wov1sLMEcFsv'), Address(base58'3P9xX849YJXg7C87v82cDyDy5VhKiPJpHo8'), Address(base58'3PKHFX6W4aAr1e1b8MUTz5HmdWVUcjWhgY4')]
 let backupReserveFund = "3P4kBiU4wr2yV1S5gMfu3MdkVvy7kxXHsKe"
+let shutdownAddress = Address(base58'3PEpv9hRFWEEBU22WRnLsw1bH4YGtcU728o')
 
 func getFeeAddress() = {
   let reserveFund = getString("setup_universalFeeAddress").valueOrElse(backupReserveFund)
@@ -54,6 +55,10 @@ func getBalance(assetId: ByteVector|Unit) = {
     case x: Unit => wavesBalance(this).available
     case _ => assetBalance(this, assetId.value())
   }
+}
+
+func poolsPaused() = {
+  getBoolean(shutdownAddress, "pools_paused").valueOrElse(false)
 }
 
 func swapPwaves(asset0: String, asset1: String, amount0: Int) = {
@@ -194,7 +199,7 @@ func swapInternal(i: Invocation, routesStr: String, minToReceive: Int, refKey: S
     feeAmount
   } else {
     let poolAddressStr = tryGetString("static_asset_"+asset1Str+"_puzzlePool")
-    if (poolAddressStr == "") then {0} else {
+    if (poolAddressStr == "" || poolsPaused()) then {0} else {
       strict usdnBalanceBefore = getBalance(usdnId)
       let convertedFeeEmul = invoke(addressFromStringValue(poolAddressStr),"swapReadOnly",[asset1Str, usdnIdStr,feeAmount],[])
       if (convertedFeeEmul != 0) then {
