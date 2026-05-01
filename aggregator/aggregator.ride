@@ -2,7 +2,7 @@
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 
-let VERSION = "AGGREGATOR-1.0.2 PROD"
+let VERSION = "AGGREGATOR-1.0.5 PROD"
 let CONTRACT_TYPE = "AGGREGATOR"
 
 let usdnIdStr = "DG2xFkPdDwKUoBkzGAhQtLpSGzfXLiCYPEzeKH2Ad24p"
@@ -14,6 +14,16 @@ let pzPoolsL2Wrapper = "3PQoBfUKHkJAeGWhooLP7WS8ovb54av9Jp2"
 let pWavesDapp = "3PNfWAt2wdUxjJJKi7gXZTt7CgeP3QWjxAe"
 
 let managers = [Address(base58'3PMcMiMEs6w56NRGacksXtFG5zS7doE9fpL'), Address(base58'3PMKAL4cd77onkYuuU35115Wov1sLMEcFsv'), Address(base58'3P9xX849YJXg7C87v82cDyDy5VhKiPJpHo8'), Address(base58'3PKHFX6W4aAr1e1b8MUTz5HmdWVUcjWhgY4')]
+let backupReserveFund = "3P4kBiU4wr2yV1S5gMfu3MdkVvy7kxXHsKe"
+let shutdownAddress = Address(base58'3PEpv9hRFWEEBU22WRnLsw1bH4YGtcU728o')
+
+func getFeeAddress() = {
+  let reserveFund = getString("setup_universalFeeAddress").valueOrElse(backupReserveFund)
+  match addressFromString(reserveFund) {
+    case a: Address => a
+    case _ => Address(backupReserveFund.fromBase58String())
+  }
+}
 
 func tryGetString(key: String) = {
   match getString(this, key) {
@@ -45,6 +55,10 @@ func getBalance(assetId: ByteVector|Unit) = {
     case x: Unit => wavesBalance(this).available
     case _ => assetBalance(this, assetId.value())
   }
+}
+
+func poolsPaused() = {
+  getBoolean(shutdownAddress, "pools_paused").valueOrElse(false)
 }
 
 func swapPwaves(asset0: String, asset1: String, amount0: Int) = {
@@ -123,7 +137,10 @@ func swapInternal(i: Invocation, routesStr: String, minToReceive: Int, refKey: S
 
     strict i1 = if (dAppType == "swopfi") then {
       invoke(Address(dApp.fromBase58String()),"exchange",[1],[AttachedPayment(t0, amount0)]) 
-    } else if (dAppType == "puzzle") then {
+    } else if (dAppType == "swopfi_v3") then {
+      invoke(Address(dApp.fromBase58String()), "callFunction", ["swap", ["0"]], [AttachedPayment(t0, amount0)])
+    }
+    else if (dAppType == "puzzle") then {
       let pool = Address(dApp.fromBase58String())
       let poolTokenIdBinary = getBinary(pool, "global_poolToken_id").valueOrErrorMessage("No poolToken entry in " + dApp)
       let poolTokenIdStr = getAssetString(poolTokenIdBinary)
@@ -185,7 +202,7 @@ func swapInternal(i: Invocation, routesStr: String, minToReceive: Int, refKey: S
     feeAmount
   } else {
     let poolAddressStr = tryGetString("static_asset_"+asset1Str+"_puzzlePool")
-    if (poolAddressStr == "") then {0} else {
+    if (poolAddressStr == "" || poolsPaused()) then {0} else {
       strict usdnBalanceBefore = getBalance(usdnId)
       let convertedFeeEmul = invoke(addressFromStringValue(poolAddressStr),"swapReadOnly",[asset1Str, usdnIdStr,feeAmount],[])
       if (convertedFeeEmul != 0) then {
@@ -225,7 +242,7 @@ func swapInternal(i: Invocation, routesStr: String, minToReceive: Int, refKey: S
   (if( amount0 != 0 ) then [ScriptTransfer(i.caller, amount0, asset0)] else [])
   ++
   # if asset1 is not added to puzzle fee pools
-  (if( usdnFee == 0 ) then [ScriptTransfer(Address(base58'3P4kBiU4wr2yV1S5gMfu3MdkVvy7kxXHsKe'), feeAmount, asset1)] else [])
+  (if( usdnFee == 0 ) then [ScriptTransfer(getFeeAddress(), feeAmount, asset1)] else [])
   
   }
 }
@@ -281,7 +298,9 @@ func verify() = {
       case _ => false
     }
 
-  if (multisigOk) then { # verify with multisig
+  let isInited = if (multisigOk) then getBoolean(multisigAddress.value(), "INITED").valueOrElse(false) else false
+  let hasAdmins = if (multisigOk) then getString(multisigAddress.value(), "ADMINS_PBKS").valueOrElse("") != "" else false
+  if (multisigOk && isInited && hasAdmins) then { # verify with multisig
     match tx {
       case ttx:SetScriptTransaction => {
         match ttx.script {
