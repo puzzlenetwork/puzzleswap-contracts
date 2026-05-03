@@ -2,7 +2,7 @@
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 
-let VERSION = "PZ-1.4.2 PROD"
+let VERSION = "PZ-1.4.2 TEST"
 let CONTRACT_TYPE = "MULTIPOOL"
 
 let WAVES_RESERVE = 10000000
@@ -170,15 +170,16 @@ let earnedAssets = assetIds
 ## UTIL METHODS ##
 
 func isShutdown() = {
-  let shutdownAddress = addressFromString(shutdownAddressStr)
-  if shutdownAddress == unit then {false} else {
-    let globalShutdown = match getBoolean(shutdownAddress.value(), "is_shutdown") {
-      case x: Boolean => x
-      case _ => false
-    }
-    let poolShutdown = getBoolean(shutdownAddress.value(), "poolShutdown_" + this.toString()).valueOrElse(false)
-    globalShutdown || poolShutdown
-  }
+  false
+  # let shutdownAddress = addressFromString(shutdownAddressStr)
+  # if shutdownAddress == unit then {false} else {
+  #   let globalShutdown = match getBoolean(shutdownAddress.value(), "is_shutdown") {
+  #     case x: Boolean => x
+  #     case _ => false
+  #   }
+  #   let poolShutdown = getBoolean(shutdownAddress.value(), "poolShutdown_" + this.toString()).valueOrElse(false)
+  #   globalShutdown || poolShutdown
+  # }
 }
 
 func getCurrentTokenBalance(tokenNum: Int) = {
