@@ -2,7 +2,9 @@
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 
-let VERSION = "PZ-1.3.0 PROD"
+let VERSION = "PZ-1.4.2 PROD"
+let CONTRACT_TYPE = "MULTIPOOL"
+
 let WAVES_RESERVE = 10000000
 
 # may be better 
@@ -32,6 +34,9 @@ let MAX_WEIGHT = getInteger(CONFIG_ADDRESS, "max_weight").valueOrElse(9900)
 
 
 ## HELPER METHODS ##
+
+func get_version() = VERSION
+
 func tryGetInteger(key: String) = {
   match getInteger(this, key) {
       case b:Int => b
@@ -167,10 +172,12 @@ let earnedAssets = assetIds
 func isShutdown() = {
   let shutdownAddress = addressFromString(shutdownAddressStr)
   if shutdownAddress == unit then {false} else {
-    match getBoolean(shutdownAddress.value(), "is_shutdown") {
+    let globalShutdown = match getBoolean(shutdownAddress.value(), "is_shutdown") {
       case x: Boolean => x
       case _ => false
     }
+    let poolShutdown = getBoolean(shutdownAddress.value(), "poolShutdown_" + this.toString()).valueOrElse(false)
+    globalShutdown || poolShutdown
   }
 }
 
@@ -626,6 +633,8 @@ func init() = {
     FOLD<10>(i.payments, [], handler)
   }
 
+  strict _checkPaymentsSize = if (i.payments.size() != T) then throw("you need to attach " + T.toString() + " tokens to init the pool") else false
+  strict _checkTokensValidity = if (!(checkTokensValidity(i.payments))) then throw("wrong assets attached") else false
   func calculatePoolTokensAmount(payments: List[AttachedPayment]) = {
     func handler(accum: Int, pmt: AttachedPayment) = {
       let assetId = pmt.assetId
@@ -680,12 +689,13 @@ func generateIndex(needChange: Boolean) = {
       
       let wavesOut = getWavesChangeAmount(PIssuedNoMult, i.payments, needChange)
       let leaseActions = rebalanceLeaseActions(wavesOut, getNodeAddress())
+      let lpRecipient = if (layer2Addresses.indexOf(i.caller.toString()) != unit) then i.caller else i.originCaller
 
-      (result ++ [
+      (leaseActions ++ result ++ [
         reissue,
-        ScriptTransfer(i.caller, PIssuedWithMult, tryGetBinary("global_poolToken_id")),
+        ScriptTransfer(lpRecipient, PIssuedWithMult, tryGetBinary("global_poolToken_id")),
         IntegerEntry("global_poolToken_amount", tryGetInteger("global_poolToken_amount") + PIssuedWithMult)
-      ] ++ leaseActions, PIssuedWithMult)
+      ], PIssuedWithMult)
     }
   }
 }
@@ -707,31 +717,32 @@ func redeemIndex(sendToOrigin: Boolean) = {
     let wavesOut = getWavesRedeemAmount(PRedeemedWithNoMult)
     let leaseActions = rebalanceLeaseActions(wavesOut, getNodeAddress())
 
-    result ++ [
+    leaseActions ++ result ++ [
       Burn(tryGetBinary("global_poolToken_id"), PRedeemedWithMult),
       IntegerEntry("global_poolToken_amount", tryGetInteger("global_poolToken_amount") - PRedeemedWithMult)
-    ] ++ leaseActions
+    ]
   }
 }
 
 @Callable(i)
 func stakeIndex() = {
+  strict _isShutdown = if (isShutdown()) then throw("contract is on stop") else false
   let addressStr = i.originCaller.toString()
   let pmt = i.payments[0]
 
   if (pmt.assetId.value() != tryGetBinary("global_poolToken_id")) then {throw("wrong asset attached")} else {
     let wavesClaimOut = getWavesClaimAmount(i.originCaller)
-    indexStakeResult(addressStr, pmt.amount) ++ rebalanceLeaseActions(wavesClaimOut, getNodeAddress())
+    rebalanceLeaseActions(wavesClaimOut, getNodeAddress()) ++ indexStakeResult(addressStr, pmt.amount)
   }
 }
 
 @Callable(i)
 func stakeIndexFor(addressStr: String) = {
+  strict _isShutdown = if (isShutdown()) then throw("contract is on stop") else false
   let pmt = i.payments[0]
-
   if (pmt.assetId.value() != tryGetBinary("global_poolToken_id")) then {throw("wrong asset attached")} else {
     let wavesClaimOut = getWavesClaimAmount(addressStr.addressFromStringValue())
-    indexStakeResult(addressStr, pmt.amount) ++ rebalanceLeaseActions(wavesClaimOut, getNodeAddress())
+    rebalanceLeaseActions(wavesClaimOut, getNodeAddress()) ++ indexStakeResult(addressStr, pmt.amount)
   }
 }
 
@@ -751,11 +762,12 @@ func unstakeIndex(indexAmount: Int) = {
   } else if (indexAmount > indexAvailable) then {throw("you don't have index tokens available")} 
   else {
     let wavesClaimOut = getWavesClaimAmount(addressStr.addressFromStringValue())
+    rebalanceLeaseActions(wavesClaimOut, getNodeAddress()) ++
     claimResult(addressStr.addressFromStringValue())._1 ++ [
       IntegerEntry(addressStr + "_indexStaked", indexAvailable - indexAmount),
       IntegerEntry("global_indexStaked", tryGetInteger("global_indexStaked") - indexAmount),
       ScriptTransfer(i.caller, indexAmount, getBinaryValue("global_poolToken_id"))
-    ] ++ rebalanceLeaseActions(wavesClaimOut, getNodeAddress())
+    ]
   }
 }
 
@@ -766,7 +778,7 @@ func claimIndexRewards() = {
   } else {
     let wavesClaimOut = getWavesClaimAmount(i.caller)
     let cr = claimResult(i.caller)
-    (cr._1 ++ rebalanceLeaseActions(wavesClaimOut, getNodeAddress()), cr._2)
+    (rebalanceLeaseActions(wavesClaimOut, getNodeAddress()) ++ cr._1, cr._2)
   }
 }
 
@@ -851,7 +863,7 @@ func swap(assetOut: String, minimum: Int) = {
     let leaseActions = rebalanceLeaseActions(wavesOut, getNodeAddress())
 
     (
-      [
+      leaseActions ++ [
         # change state with new balance values
         assetOutChange,
         assetInChange
@@ -869,7 +881,7 @@ func swap(assetOut: String, minimum: Int) = {
 
         # send platform fee
         ScriptTransfer(feesAddress, protocolFee, feeAssetOut)
-      ] ++ leaseActions, 
+      ], 
       AmountOut
     )
   }
@@ -937,6 +949,7 @@ func transferOwnership(newOwnerAddress: String) = {
 
 @Callable(i)
 func setFee(newFee: Int) = {
+  strict _isShutdown = if (isShutdown()) then throw("contract is on stop") else true
   if (i.caller.toString() != tryGetString("static_poolOwner")) then {throw("this call available only for pool owner")}
   else if (getInteger(govAddress, "approvedTx_"+i.transactionId.toBase58String()).valueOrElse(0) < 1) then {throw("this transaction needs approval from puzzle network")}
   else {
@@ -948,7 +961,7 @@ func setFee(newFee: Int) = {
 func setRebalancingPlan(assetIdsStr: String, assetWeightsStr: String, baseTokenIdStr: String, stepsAmount: Int, stepsInterval: Int) = {
   # used by admin to set up rebalancing plan
   # if new tokens are added to the pool, they need to be attached as a payment to this invoke
-
+  strict _isShutdown = if (isShutdown()) then throw("contract is on stop") else true
   if (i.caller != addressFromStringValue(tryGetString("static_poolOwner"))) then {throw("this call available only for pool owner")}
   else if (getBoolean(this, "rebalance_inProgress").valueOrElse(false)) then {
     throw("rebalancing in progress")
@@ -978,7 +991,6 @@ func setRebalancingPlan(assetIdsStr: String, assetWeightsStr: String, baseTokenI
     } else 
     {  # validate arguments:
       if (newAssetIdsStrLi.size() != newAssetWeightsStrLi.size()) then {throw("assetIds and assetWeights should have same length")}
-      else if (validPayments != (addedAssets.size() + i.payments.size())) then {throw("Payments not present or something wrong with them")}
       else if (feeAssetStr == "") then {throw("pool must have one of the supported fee assets in the composition")}
       else if (newAssetIdsStrLi.indexOf(baseTokenIdStr) == unit) then {throw("baseTokenId should be present in assetIds")}
       else if (stepsAmount < MIN_STEPS_AMOUNT || stepsAmount > MAX_STEPS_AMOUNT) then {throw("Steps amount should be between " + MIN_STEPS_AMOUNT.toString() + " and " + MAX_STEPS_AMOUNT.toString() + ", current: " + stepsAmount.toString())} 
@@ -1035,7 +1047,7 @@ func setRebalancingPlan(assetIdsStr: String, assetWeightsStr: String, baseTokenI
 func stepRebalancing() = {
   # can be invoked by anyone once in a stepsInterval blocks
   # is used to perform the smooth rebalancing
-
+  strict _isShutdown = if (isShutdown()) then throw("contract is on stop") else true
   let rebId = getString(govAddress, "pool_lastRebalancing_" + this.toString()).valueOrErrorMessage("rebalancing is not registered at gov address")
 
   if (!getBoolean(this, "rebalance_inProgress").valueOrElse(false)) then {
@@ -1128,6 +1140,7 @@ func stepRebalancing() = {
 func doRebalancing(assetWeightsStr: String) = {  
   # is supposed to be invoked by stepRebalancing every time it's used
 
+  strict _isShutdown = if (isShutdown()) then throw("contract is on stop") else true
   let assetWeightsStrLi = assetWeightsStr.split(",")
   let assetWeightsSum = FOLD<10>(assetWeightsStrLi, 0, sum)
   let assetIdsStrLi = tryGetString("static_tokenIds").split(",")    
@@ -1170,7 +1183,7 @@ func doRebalancing(assetWeightsStr: String) = {
 @Callable(i)
 func doRebalancingWithNewTokens(assetIdsStr: String, assetWeightsStr: String, baseTokenIdStr: String) = {  
   # used only once by stepRebalancing function - at step 0
-
+  strict _isShutdown = if (isShutdown()) then throw("contract is on stop") else true
   let newAssetWeightsStrLi = assetWeightsStr.split(",")
   let prevAssetIdsStrLi = tryGetString("static_tokenIds").split(",")
   let newAssetIdsStrLi = assetIdsStr.split(",")
@@ -1248,19 +1261,63 @@ func doRebalancingWithNewTokens(assetIdsStr: String, assetWeightsStr: String, ba
 
 @Verifier(tx)
 func verify() = {
-  if (
-    getInteger("global_wasPreInited").valueOrElse(0) == 0 && (
+  if (getInteger("global_wasPreInited").valueOrElse(0) == 0 && (
     sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey) || sigVerify(tx.bodyBytes, tx.proofs[0], masterPubKey)
   )) then {
-    true
-  } else {
-    match tx {
-      case tx: SetScriptTransaction => {
-        let scriptFull = tx.script.value()
-        let hash = scriptFull.sha256().toBase58String()
-        sigVerify(tx.bodyBytes, tx.proofs[0], masterPubKey) && getInteger(coldMasterAddress, "approvedScript_" + hash).valueOrElse(0) > height
-      }
-      case _ => sigVerify(tx.bodyBytes, tx.proofs[0], masterPubKey) && getInteger(coldMasterAddress, "approvedTx_" + tx.id.toBase58String()).valueOrElse(0) > 0
+      true
+    } else {
+      let multisigStr = "3PJdVErH5VmVYvkuN3Ayrrtd1zCZ4Xru6gT"
+      let multisigAddress = addressFromString(multisigStr)
+      let multisigOk = match (multisigAddress) {
+          case t:Address => true
+          case _ => false
+        }
+      let isInited = if (multisigOk) then getBoolean(multisigAddress.value(), "INITED").valueOrElse(false) else false
+      let hasAdmins = if (multisigOk) then getString(multisigAddress.value(), "ADMINS_PBKS").valueOrElse("") != "" else false
+      if (multisigOk && isInited && hasAdmins) then { # verify with multisig
+        match tx {
+          case ttx:SetScriptTransaction => {
+            match ttx.script {
+              case script: ByteVector =>
+                let scriptHasha = blake2b256(script).toBase58String()
+                let validFrom = getInteger(multisigAddress.value(), "script%%" + CONTRACT_TYPE + "%%" + scriptHasha + "%%validFrom").valueOrErrorMessage("validFrom not set")
+                let validTo = getInteger(multisigAddress.value(), "script%%" + CONTRACT_TYPE + "%%" + scriptHasha + "%%validTo").valueOrErrorMessage("validTo not set")
+                height >= validFrom && height <= validTo
+              case _ => false  # Reject SetScript(null) explicitly
+            }
+          }
+          case otx => {
+            let taskId = "tx_" + this.toString() + "_" + toBase58String(otx.id)
+            let isApproved = getBoolean(multisigAddress.value(), this.toString() + "_" + toBase58String(otx.id) + "__approved").valueOrElse(false)
+            let approvedFrom = getInteger(multisigAddress.value(), taskId + "__approvedFrom").valueOrElse(0)
+            isApproved && height >= approvedFrom
+          }
+        } 
+      } else { # invalid multisig address — only allow SetScript via pool key or masterPubKey to recover
+        match tx {
+          case ttx: SetScriptTransaction => sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey) || sigVerify(ttx.bodyBytes, ttx.proofs[0], masterPubKey)
+          case _ => false
+        }
     }
   }
 }
+
+
+# @Verifier(tx)
+# func verify() = {
+#   if (
+#     getInteger("global_wasPreInited").valueOrElse(0) == 0 && (
+#     sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey) || sigVerify(tx.bodyBytes, tx.proofs[0], masterPubKey)
+#   )) then {
+#     true
+#   } else {
+#     match tx {
+#       case tx: SetScriptTransaction => {
+#         let scriptFull = tx.script.value()
+#         let hash = scriptFull.sha256().toBase58String()
+#         sigVerify(tx.bodyBytes, tx.proofs[0], masterPubKey) && getInteger(coldMasterAddress, "approvedScript_" + hash).valueOrElse(0) > height
+#       }
+#       case _ => sigVerify(tx.bodyBytes, tx.proofs[0], masterPubKey) && getInteger(coldMasterAddress, "approvedTx_" + tx.id.toBase58String()).valueOrElse(0) > 0
+#     }
+#   }
+# }
