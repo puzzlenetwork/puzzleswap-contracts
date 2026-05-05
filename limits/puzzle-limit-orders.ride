@@ -370,7 +370,9 @@ func verify() = {
       case _ => false
     }
 
-  if (multisigOk) then { # verify with multisig
+  let isInited = if (multisigOk) then getBoolean(multisigAddress.value(), "INITED").valueOrElse(false) else false
+  let hasAdmins = if (multisigOk) then getString(multisigAddress.value(), "ADMINS_PBKS").valueOrElse("") != "" else false
+  if (multisigOk && isInited && hasAdmins) then { # verify with multisig
     match tx {
       case ttx:SetScriptTransaction => {
         match ttx.script {
