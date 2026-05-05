@@ -58,7 +58,7 @@ func getBalance(assetId: ByteVector|Unit) = {
 }
 
 func poolsPaused() = {
-  getBoolean(shutdownAddress, "pools_paused").valueOrElse(false)
+  getBoolean(shutdownAddress, "is_shutdown").valueOrElse(false)
 }
 
 func swapPwaves(asset0: String, asset1: String, amount0: Int) = {
