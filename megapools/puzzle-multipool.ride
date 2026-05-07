@@ -2,7 +2,7 @@
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 
-let VERSION = "PZ-1.4.2 TEST"
+let VERSION = "PZ-1.4.8 PROD"
 let CONTRACT_TYPE = "MULTIPOOL"
 
 let WAVES_RESERVE = 10000000
@@ -25,7 +25,8 @@ let PoolTokenDecimals = 8
 let PoolTokenScale = pow(10, 0, PoolTokenDecimals, 0, 0, HALFUP)
 
 # rebalance constants 
-let MIN_STEPS_AMOUNT = getInteger(CONFIG_ADDRESS, "min_steps_amount").valueOrElse(1)
+let GLOBAL_MIN_STEP_LIMIT = 2
+let MIN_STEPS_AMOUNT = max([GLOBAL_MIN_STEP_LIMIT, getInteger(CONFIG_ADDRESS, "min_steps_amount").valueOrElse(GLOBAL_MIN_STEP_LIMIT)])
 let MAX_STEPS_AMOUNT = getInteger(CONFIG_ADDRESS, "max_steps_amount").valueOrElse(500)
 let MIN_STEPS_INTERVAL = getInteger(CONFIG_ADDRESS, "min_steps_interval").valueOrElse(1)
 let MAX_STEPS_INTERVAL = getInteger(CONFIG_ADDRESS, "max_steps_interval").valueOrElse(10000)
@@ -79,7 +80,7 @@ func getAssetBytes(assetIdStr: String) = {
 func getTokenBalance(assetId: ByteVector|Unit) = {
   match (assetId) {
       case t:ByteVector => assetBalance(this, t)
-      case _ => wavesBalance(this).available
+      case _ => wavesBalance(this).regular
     }
 }
 
@@ -89,6 +90,7 @@ func getNodeAddress() = {
 }
 
 func rebalanceLeaseActions(wavesOut: Int, nodeAddr: Address|Unit) = {
+  strict _isPositive = if (wavesOut < 0) then {throw("negative amount of WAVES to lease")} else true
   let currentLeaseId = tryGetString("global_lastLeaseId")
   let cancelLeaseAction = if (currentLeaseId != "") then [LeaseCancel(fromBase58String(currentLeaseId))] else []
 
@@ -97,11 +99,14 @@ func rebalanceLeaseActions(wavesOut: Int, nodeAddr: Address|Unit) = {
       let newLeaseAmount = wavesBalance(this).regular - wavesOut - WAVES_RESERVE
       if (newLeaseAmount > 0) then {
         let leaseAction = Lease(node, newLeaseAmount)
-        cancelLeaseAction ++ [
-          leaseAction,
-          StringEntry("global_lastLeaseId", toBase58String(calculateLeaseId(leaseAction))),
-          IntegerEntry("global_lastLeaseAmount", newLeaseAmount)
-        ]
+        let newLeaseId = toBase58String(calculateLeaseId(leaseAction))
+        if (newLeaseId == currentLeaseId) then [] else {
+          cancelLeaseAction ++ [
+            leaseAction,
+            StringEntry("global_lastLeaseId", newLeaseId),
+            IntegerEntry("global_lastLeaseAmount", newLeaseAmount)
+          ]
+        }
       } else {
         cancelLeaseAction ++ (if (currentLeaseId != "") then [
           DeleteEntry("global_lastLeaseId"),
@@ -170,16 +175,15 @@ let earnedAssets = assetIds
 ## UTIL METHODS ##
 
 func isShutdown() = {
-  false
-  # let shutdownAddress = addressFromString(shutdownAddressStr)
-  # if shutdownAddress == unit then {false} else {
-  #   let globalShutdown = match getBoolean(shutdownAddress.value(), "is_shutdown") {
-  #     case x: Boolean => x
-  #     case _ => false
-  #   }
-  #   let poolShutdown = getBoolean(shutdownAddress.value(), "poolShutdown_" + this.toString()).valueOrElse(false)
-  #   globalShutdown || poolShutdown
-  # }
+  let shutdownAddress = addressFromString(shutdownAddressStr)
+  if shutdownAddress == unit then {false} else {
+    let globalShutdown = match getBoolean(shutdownAddress.value(), "is_shutdown") {
+      case x: Boolean => x
+      case _ => false
+    }
+    let poolShutdown = getBoolean(shutdownAddress.value(), "poolShutdown_" + this.toString()).valueOrElse(false)
+    globalShutdown || poolShutdown
+  }
 }
 
 func getCurrentTokenBalance(tokenNum: Int) = {
@@ -315,9 +319,7 @@ func handlePoolTokensAdd(PIssued: Int, payments: List[AttachedPayment], userAddr
   func handleTokenChange(accum: List[IntegerEntry|ScriptTransfer], tokenId: ByteVector|Unit) = {
     let Bk = tryGetInteger("global_"+tokenId.getAssetString()+"_balance")
     let PSupply = getVirtualPoolTokenAmount()
-    let tokenDecimals = tryGetInteger("static_"+tokenId.getAssetString()+"_scale")
-    let a1 = fraction((PSupply + PIssued).toBigInt()*Scale8.toBigInt(), tokenDecimals.toBigInt(), PSupply.toBigInt(), CEILING)
-    let Dk = fraction(a1 - tokenDecimals.toBigInt()*Scale8.toBigInt(), Bk.toBigInt(), tokenDecimals.toBigInt()*Scale8.toBigInt(), CEILING).toInt()  # deposited amount of token K
+    let Dk = fraction(PIssued.toBigInt(), Bk.toBigInt(), PSupply.toBigInt(), CEILING).toInt()  # deposited amount of token K
 
     let paymentAmount = getTokenPaymentAmount(tokenId)
     let toReturn = paymentAmount - Dk
@@ -335,11 +337,7 @@ func handlePoolTokensRedeem(PRedeemed: Int, userAddress: Address) = {
   func handleTokenRedeem(accum: List[IntegerEntry|ScriptTransfer], tokenId: ByteVector|Unit) = {
     let Bk = tryGetInteger("global_"+tokenId.getAssetString()+"_balance")
     let PSupply = getVirtualPoolTokenAmount()
-    let tokenDecimals = tryGetInteger("static_"+tokenId.getAssetString()+"_scale")
-
-    let psuppl = fraction(((PSupply - PRedeemed).toBigInt()*Scale8.toBigInt()), Scale8.toBigInt(), PSupply.toBigInt(), DOWN)
-    let amount = fraction(
-      (Scale16.toBigInt() - psuppl), Bk.toBigInt(), Scale16.toBigInt(), DOWN).toInt()
+    let amount = fraction(PRedeemed.toBigInt(), Bk.toBigInt(), PSupply.toBigInt(), DOWN).toInt()
 
     accum ++ [
       IntegerEntry("global_"+tokenId.getAssetString()+"_balance", Bk-amount),
@@ -353,6 +351,7 @@ func handlePoolTokensRedeem(PRedeemed: Int, userAddress: Address) = {
 func calculateOutAmount(AmountIn: Int, assetIn: ByteVector|Unit, assetOut: ByteVector|Unit, BalanceIn: Int, BalanceOut: Int) = {
   let IndexIn = assetIds.indexOf(assetIn).value()
   let IndexOut = assetIds.indexOf(assetOut).value()
+  
   if (IndexIn == IndexOut) then { AmountIn }
   else {
     fraction( BalanceOut, 
@@ -364,7 +363,26 @@ func calculateOutAmount(AmountIn: Int, assetIn: ByteVector|Unit, assetOut: ByteV
                     12,
                     16,
                     CEILING).toInt()    
-              , Scale8 * Scale8, HALFEVEN)   
+              , Scale8 * Scale8, DOWN)   
+  }
+}
+
+func calculateOutAmount_CEILING(AmountIn: Int, assetIn: ByteVector|Unit, assetOut: ByteVector|Unit, BalanceIn: Int, BalanceOut: Int) = {
+  let IndexIn = assetIds.indexOf(assetIn).value()
+  let IndexOut = assetIds.indexOf(assetOut).value()
+  
+  if (IndexIn == IndexOut) then { AmountIn }
+  else {
+    fraction( BalanceOut, 
+              Scale8 * Scale8 - 
+
+              pow(fraction(BalanceIn.toBigInt()*10000.toBigInt(), (Scale8 * Scale8).toBigInt(), (BalanceIn + AmountIn).toBigInt()*10000.toBigInt(), HALFUP), 
+                    16, 
+                    fraction(AssetsWeights[IndexIn], 1_000000000000, AssetsWeights[IndexOut]).toBigInt(),
+                    12,
+                    16,
+                    CEILING).toInt()    
+              , Scale8 * Scale8, CEILING)   
   }
 }
 
@@ -428,8 +446,7 @@ func getWavesRedeemAmount(PRedeemed: Int) = {
   if (assetIds.indexOf(unit) == unit) then 0 else {
     let Bk = tryGetInteger("global_WAVES_balance")
     let PSupply = getVirtualPoolTokenAmount()
-    let psuppl = fraction(((PSupply - PRedeemed).toBigInt()*Scale8.toBigInt()), Scale8.toBigInt(), PSupply.toBigInt(), DOWN)
-    fraction((Scale16.toBigInt() - psuppl), Bk.toBigInt(), Scale16.toBigInt(), CEILING).toInt()
+    fraction(PRedeemed.toBigInt(), Bk.toBigInt(), PSupply.toBigInt(), CEILING).toInt()
   }
 }
 
@@ -443,9 +460,7 @@ func getWavesChangeAmount(PIssued: Int, payments: List[AttachedPayment], needCha
     if (wavesPmt == 0) then 0 else {
       let Bk = tryGetInteger("global_WAVES_balance")
       let PSupply = getVirtualPoolTokenAmount()
-      let tokenDecimals = tryGetInteger("static_WAVES_scale")
-      let a1 = fraction((PSupply + PIssued).toBigInt()*Scale8.toBigInt(), tokenDecimals.toBigInt(), PSupply.toBigInt(), CEILING)
-      let Dk = fraction(a1 - tokenDecimals.toBigInt()*Scale8.toBigInt(), Bk.toBigInt(), tokenDecimals.toBigInt()*Scale8.toBigInt(), CEILING).toInt()
+      let Dk = fraction(PIssued.toBigInt(), Bk.toBigInt(), PSupply.toBigInt(), CEILING).toInt()
       max([0, wavesPmt - Dk])
     }
   }
@@ -551,22 +566,27 @@ func setWavesNode(nodeAddress: String) = {
     if (!isOwnerOrMaster(i.caller)) then {throw("admin/owner only")}
     else {
       let _nodeAddress = nodeAddress.addressFromString()
-      if (_nodeAddress == unit) then {throw("wrong node address")} else {
-        rebalanceLeaseActions(0, _nodeAddress) ++ [
+      let nodeOk = match (_nodeAddress) {
+        case t:Address => true
+        case _ => false
+      }
+      strict canSetNode = if (nodeOk || nodeAddress == "") then true else throw("Wrong node address")
+      strict selfSet = if (_nodeAddress == this) then throw("Node address can't be contract's own address") else true
+      let newNodeAddr = if (nodeAddress != "") then _nodeAddress else unit
+      let leaseActions = rebalanceLeaseActions(0, newNodeAddr)
+      leaseActions ++ [
             StringEntry("static_nodeAddress", nodeAddress)
         ]
-      }
     }
 }
 
 @Callable(i)
 func preInit(assetIdsStr: String, assetWeightsStr: String, baseTokenIdStr: String, poolDomain: String, poolOwner: String, fee: Int) = {
-  let poolOwnerAddress = Address(poolOwner.fromBase58String())
-
+  strict _checkPoolOwner = if (poolOwner.addressFromString() == unit) then {throw("wrong pool owner address")} else true
   let assetIdsStrLi = assetIdsStr.split(",")    
   let assetIdsLi = FOLD<10>(assetIdsStrLi, [], addAssetBytesToList)
   let feeAssetStr = FOLD<10>(assetIdsStrLi, "", checkFeeAsset)
-
+  strict basePresent = if (assetIdsStrLi.indexOf(baseTokenIdStr) == unit) then throw("base token missing in list") else true
   if (isShutdown()) then {
     throw("contract is on stop")
   } 
@@ -578,6 +598,8 @@ func preInit(assetIdsStr: String, assetWeightsStr: String, baseTokenIdStr: Strin
   else {
     let assetWeightsStrLi = assetWeightsStr.split(",")
     let assetWeightsSum = FOLD<10>(assetWeightsStrLi, 0, sum)
+
+    strict sameLengths = if (assetIdsStrLi.size() != assetWeightsStrLi.size()) then throw("assetIds and weights length mismatch") else true
 
     func addTokenDataEntries(accum: List[IntegerEntry], assetNum: Int) = {
       if (assetNum >= assetIdsLi.size()) then {
@@ -690,11 +712,10 @@ func generateIndex(needChange: Boolean) = {
       
       let wavesOut = getWavesChangeAmount(PIssuedNoMult, i.payments, needChange)
       let leaseActions = rebalanceLeaseActions(wavesOut, getNodeAddress())
-      let lpRecipient = if (layer2Addresses.indexOf(i.caller.toString()) != unit) then i.caller else i.originCaller
 
       (leaseActions ++ result ++ [
         reissue,
-        ScriptTransfer(lpRecipient, PIssuedWithMult, tryGetBinary("global_poolToken_id")),
+        ScriptTransfer(i.caller, PIssuedWithMult, tryGetBinary("global_poolToken_id")),
         IntegerEntry("global_poolToken_amount", tryGetInteger("global_poolToken_amount") + PIssuedWithMult)
       ], PIssuedWithMult)
     }
@@ -704,6 +725,7 @@ func generateIndex(needChange: Boolean) = {
 @Callable(i)
 func redeemIndex(sendToOrigin: Boolean) = {
   # throw("LP is closed yet")
+  strict _checkPaymentsSize = if (i.payments.size() != 1) then throw("please attach exactly one payment") else false
   let pmt = i.payments[0]
   if (pmt.assetId != tryGetBinary("global_poolToken_id")) then {
     throw("please attach pool share token")
@@ -714,6 +736,7 @@ func redeemIndex(sendToOrigin: Boolean) = {
     let PRedeemedWithMult = pmt.amount
     let PRedeemedWithNoMult = fraction(PRedeemedWithMult, getKMult(), Scale16, DOWN)
     let result = handlePoolTokensRedeem(PRedeemedWithNoMult, if (sendToOrigin) then {i.originCaller} else {i.caller})
+    # let result = handlePoolTokensRedeem(PRedeemedWithNoMult, if (sendToOrigin) then {i.originCaller} else {i.caller})
 
     let wavesOut = getWavesRedeemAmount(PRedeemedWithNoMult)
     let leaseActions = rebalanceLeaseActions(wavesOut, getNodeAddress())
@@ -728,6 +751,7 @@ func redeemIndex(sendToOrigin: Boolean) = {
 @Callable(i)
 func stakeIndex() = {
   strict _isShutdown = if (isShutdown()) then throw("contract is on stop") else false
+  strict _checkPaymentsSize = if (i.payments.size() != 1) then throw("please attach exactly one payment") else false
   let addressStr = i.originCaller.toString()
   let pmt = i.payments[0]
 
@@ -740,6 +764,7 @@ func stakeIndex() = {
 @Callable(i)
 func stakeIndexFor(addressStr: String) = {
   strict _isShutdown = if (isShutdown()) then throw("contract is on stop") else false
+  strict _checkPaymentsSize = if (i.payments.size() != 1) then throw("please attach exactly one payment") else false
   let pmt = i.payments[0]
   if (pmt.assetId.value() != tryGetBinary("global_poolToken_id")) then {throw("wrong asset attached")} else {
     let wavesClaimOut = getWavesClaimAmount(addressStr.addressFromStringValue())
@@ -750,8 +775,9 @@ func stakeIndexFor(addressStr: String) = {
 @Callable(i)
 func unstakeIndex(indexAmount: Int) = {
   # unstakes for i.originCaller if used one of 2 known layer2 addresses; for i.caller otherwise
-
-  let addressStr = if (layer2Addresses.indexOf(i.caller.toString()) != unit) then {
+  strict _isValidAmount = if (indexAmount <= 0) then throw("amount should be positive") else false
+  let isLayer2 = layer2Addresses.split(",").containsElement(i.caller.toString())
+  let addressStr = if (isLayer2) then {
     i.originCaller.toString()
   } else {
     i.caller.toString()
@@ -823,7 +849,7 @@ func swap(assetOut: String, minimum: Int) = {
                             else if (feeAssetOut == AssetOut) then {AssetOutBalance2} 
                             else {tryGetInteger("global_"+feeAssetOut.getAssetString()+"_balance")}
     
-  let feeAmountOut = calculateOutAmount(feeAmountIn, AssetIn, feeAssetOut, AssetInBalance, feeAssetOutBalance)
+  let feeAmountOut = calculateOutAmount_CEILING(feeAmountIn, AssetIn, feeAssetOut, AssetInBalance, feeAssetOutBalance)
 
   # do all the verifications
   # TODO: verification that realPrice <= marketPrice (just in case)
@@ -861,7 +887,12 @@ func swap(assetOut: String, minimum: Int) = {
 
     let wavesOut = (if (AssetOut == unit) then AmountOut else 0)
                  + (if (feeAssetOut == unit) then (creatorFee + protocolFee) else 0)
-    let leaseActions = rebalanceLeaseActions(wavesOut, getNodeAddress())
+    let shouldRebalanceLease = AssetIn == unit || AssetOut == unit || feeAssetOut == unit
+    let leaseActions = if (shouldRebalanceLease) then {
+      rebalanceLeaseActions(wavesOut, getNodeAddress())
+    } else {
+      []
+    }
 
     (
       leaseActions ++ [
@@ -904,7 +935,7 @@ func swapReadOnly(assetIn: String, assetOut: String, AmountIn: Int) = {
   let AssetOutBalance = tryGetInteger("global_"+assetOut+"_balance")
   let AssetInBalanceScaled = AssetInBalance * scaleIn
   let AssetOutBalanceScaled = AssetOutBalance * scaleOut
-  let feeAmountIn = fraction(AmountIn, Fee, FeeScale)
+  let feeAmountIn = fraction(AmountIn, Fee, FeeScale, CEILING)
   let cleanAmountIn = (AmountIn - feeAmountIn)
   let cleanAmountInScaled = cleanAmountIn * scaleIn
 
@@ -919,7 +950,7 @@ func swapReadOnly(assetIn: String, assetOut: String, AmountIn: Int) = {
                             else if (feeAssetOut == AssetOut) then {AssetOutBalance2} 
                             else {tryGetInteger("global_"+feeAssetOut.getAssetString()+"_balance")}
     
-  let feeAmountOut = calculateOutAmount(feeAmountIn, AssetIn, feeAssetOut, AssetInBalance, feeAssetOutBalance)
+  let feeAmountOut = calculateOutAmount_CEILING(feeAmountIn, AssetIn, feeAssetOut, AssetInBalance, feeAssetOutBalance)
 
   # do all the verifications
   # TODO: verification that realPrice <= marketPrice (just in case)
@@ -941,6 +972,7 @@ func swapReadOnly(assetIn: String, assetOut: String, AmountIn: Int) = {
 
 @Callable(i)
 func transferOwnership(newOwnerAddress: String) = {
+  strict _isShutdown = if (isShutdown()) then throw("contract is on stop") else false
   if (i.caller.toString() != tryGetString("static_poolOwner")) then {throw("this call available only for pool owner")}
   else if (newOwnerAddress.addressFromString() == unit) then {throw("invalid address")}
   else {
@@ -950,7 +982,7 @@ func transferOwnership(newOwnerAddress: String) = {
 
 @Callable(i)
 func setFee(newFee: Int) = {
-  strict _isShutdown = if (isShutdown()) then throw("contract is on stop") else true
+  strict _isPositiveFee = if (newFee < 0) then throw("fee can't be negative") else true
   if (i.caller.toString() != tryGetString("static_poolOwner")) then {throw("this call available only for pool owner")}
   else if (getInteger(govAddress, "approvedTx_"+i.transactionId.toBase58String()).valueOrElse(0) < 1) then {throw("this transaction needs approval from puzzle network")}
   else {
