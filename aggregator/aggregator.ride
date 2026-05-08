@@ -2,7 +2,7 @@
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 
-let VERSION = "AGGREGATOR-1.0.5 PROD"
+let VERSION = "AGGREGATOR-1.0.6 PROD"
 let CONTRACT_TYPE = "AGGREGATOR"
 
 let usdnIdStr = "DG2xFkPdDwKUoBkzGAhQtLpSGzfXLiCYPEzeKH2Ad24p"
@@ -59,6 +59,10 @@ func getBalance(assetId: ByteVector|Unit) = {
 
 func poolsPaused() = {
   getBoolean(shutdownAddress, "is_shutdown").valueOrElse(false)
+}
+
+func poolPaused(addressStr: String) = {
+  getBoolean(shutdownAddress, "poolShutdown_"+addressStr).valueOrElse(false)
 }
 
 func swapPwaves(asset0: String, asset1: String, amount0: Int) = {
@@ -202,7 +206,7 @@ func swapInternal(i: Invocation, routesStr: String, minToReceive: Int, refKey: S
     feeAmount
   } else {
     let poolAddressStr = tryGetString("static_asset_"+asset1Str+"_puzzlePool")
-    if (poolAddressStr == "" || poolsPaused()) then {0} else {
+    if (poolAddressStr == "" || poolsPaused() || poolPaused(poolAddressStr)) then {0} else {
       strict usdnBalanceBefore = getBalance(usdnId)
       let convertedFeeEmul = invoke(addressFromStringValue(poolAddressStr),"swapReadOnly",[asset1Str, usdnIdStr,feeAmount],[])
       if (convertedFeeEmul != 0) then {
