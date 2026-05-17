@@ -1,0 +1,45 @@
+{-# STDLIB_VERSION 6 #-}
+{-# CONTENT_TYPE DAPP #-}
+{-# SCRIPT_TYPE ACCOUNT #-}
+
+let VERSION = "0.1.0"
+
+let allowed = [
+    Address(base58'3P8kKTkEduzaXpYcNvy9Ah7UNUZfvEuWpYb'),
+    Address(base58'3PC1tTF6svbVghvmPfuBHbQ1VA5rYFzFwBL')
+]
+
+func isAllowed(addr: Address) = {
+  indexOf(allowed, addr) != unit
+}
+
+func createAdd(accum: List[BooleanEntry], item: String) = {
+    strict itemAddr = if (addressFromString(item) == unit) then throw("Invalid address: " + item) else addressFromString(item)
+    accum ++ [BooleanEntry(item + "_poolWhitelisted", true)]
+    
+}
+
+func createRemove(accum: List[BooleanEntry], item: String) = {
+    strict itemAddr = if (addressFromString(item) == unit) then throw("Invalid address: " + item) else addressFromString(item)
+    accum ++ [BooleanEntry(item + "_poolWhitelisted", false)]
+}
+
+@Callable(i)
+func addToWhitelist(addrStr: List[String]) = {
+  if (isAllowed(i.caller)) then {
+    let whitelist = FOLD<90>(addrStr, [], createAdd)
+    whitelist
+  } else {
+    throw("Caller is not allowed to modify the whitelist")
+  }
+}
+
+@Callable(i)
+func removeFromWhitelist(addrStr: List[String]) = {
+  if (isAllowed(i.caller)) then {
+    let whitelist = FOLD<100>(addrStr, [], createRemove)
+    whitelist
+  } else {
+    throw("Caller is not allowed to modify the whitelist")
+  }
+}
