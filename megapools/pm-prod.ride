@@ -372,7 +372,7 @@ func initPool(poolDomain: String, poolOwner: String, tokenName: String, tokenDes
   let amount = pmt.amount
   let pmtAsset = if (pmt.assetId == unit) then {"WAVES"} else {throw("you have to attach some WAVES")}
 
-  if (this != this) then {throw("self-invoke only")}
+  if (this != i.caller) then {throw("self-invoke only")}
   else if (feeAssetStr == "") then {throw("pool must have one of the supported fee assets in the composition")}
   else if (poolDomain.size() > 13) then {throw("too large pool domain")}
   else if (fee > 500 || fee < 0) then {throw("fee value must be between 50 and 500 (0.5-5%)")}
