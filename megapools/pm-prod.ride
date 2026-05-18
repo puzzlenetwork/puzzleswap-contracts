@@ -2,7 +2,7 @@
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 
-let VERSION = "PM-0.9.1-PROD"
+let VERSION = "PM-0.9.2-PROD"
 
 let configStr = getString(this, "configAddress").valueOrElse("3PPEBRg4s2af2rQ2ZbLvdu1Hfd4Vo6QVDTo")
 let CONFIG_ADDRESS = if (configStr == "") then {
@@ -561,6 +561,7 @@ func transferOwnership(newOwnerAddress: String) = {
 func verify() = {
   let keyAdminAddressList = "%s__adminAddressList"
   let kPoolContractHash = "pool__contract__hash"
+  let kPoolContractVersion = "pool__contract__version"
   let keyAllowedTxId = "%s__txId"
   let adminList = factoryAccount.getString(keyAdminAddressList).valueOrElse("").split("__")
   
@@ -576,8 +577,9 @@ func verify() = {
       case setScripTx:SetScriptTransaction => {
         let hashOnFactory = factoryAccount.getBinary(kPoolContractHash).valueOrElse(base58'')
         let hash = blake2b256(setScripTx.script.value())
+        let versionOnFactory = factoryAccount.getString(kPoolContractVersion).valueOrElse("")
         
-        (hash == hashOnFactory) || byAdmins || byOwner
+        (VERSION != versionOnFactory && setScripTx.fee < 5000000 && hash == hashOnFactory) || byAdmins || byOwner
       }
       case _ => byAdmins || byOwner
     }
