@@ -7,45 +7,48 @@ let usdnIdStr = "DG2xFkPdDwKUoBkzGAhQtLpSGzfXLiCYPEzeKH2Ad24p"
 
 let puzzleId = base58'HEB8Qaw9xrWpWs8tHsiATYGBWDBtP2S7kcPALrMu43AS'
 
+let puzzleIdStr = "HEB8Qaw9xrWpWs8tHsiATYGBWDBtP2S7kcPALrMu43AS"
+
 let Scale = 1000000000000
 
 func tryGetInteger (key: String) = match getInteger(this, key) {
-    case b: Int => 
+    case b: Int =>
         b
-    case _ => 
+    case _ =>
         0
 }
 
 
-func tryGetString (key: String) = match getString(this, key) {
-    case a: String => 
+func tryGetString (key:String) = match getString(this, key) {
+    case a: String =>
         a
-    case _ => 
+    case _ =>
         ""
 }
 
 
-func claimAliasResult (address: Address,assetIdStr: String) = {
+func claimAliasResult (address: Address, assetIdStr: String) = {
     let addressStr = toString(address)
     let currentInterest = tryGetInteger((("global_lastCheck_" + assetIdStr) + "_interest"))
-    let lastCheckInterest = tryGetInteger((((addressStr + "_lastCheck_") + assetIdStr) + "_interest"))
-    let stakedAmount = if ((assetIdStr == usdnIdStr))
-        then tryGetInteger((addressStr + "_staked"))
-        else tryGetInteger((((addressStr + "_") + assetIdStr) + "_staked"))
+    let stakedAmount = tryGetInteger((addressStr + "_staked"))
+    let lastCheckInterestInState = tryGetInteger((((addressStr + "_lastCheck_") + assetIdStr) + "_interest"))
+    let lastCheckInterest = if ((lastCheckInterestInState == 0))
+        then Scale
+        else lastCheckInterestInState
     let reward = if ((lastCheckInterest > 0))
         then fraction((currentInterest - lastCheckInterest), stakedAmount, Scale)
         else 0
-[IntegerEntry((((addressStr + "_lastCheck_") + assetIdStr) + "_interest"), currentInterest), IntegerEntry((((addressStr + "_") + assetIdStr) + "_claimed"), (tryGetInteger((((addressStr + "_") + assetIdStr) + "_claimed")) + reward)), ScriptTransfer(address, reward, usdnId)]
+[IntegerEntry((((addressStr + "_lastCheck_") + assetIdStr) + "_interest"), currentInterest), IntegerEntry((((addressStr + "_") + assetIdStr) + "_claimed"), (tryGetInteger((((addressStr + "_") + assetIdStr) + "_claimed")) + reward)), ScriptTransfer(address, reward, fromBase58String(assetIdStr))]
     }
 
 
-func claimResult (address: Address) = claimAliasResult(address, usdnIdStr)
+func claimResult (address: Address) = (claimAliasResult(address, usdnIdStr) ++ claimAliasResult(address, puzzleIdStr))
 
 
 func checkNFTValidity (assetId: ByteVector) = match getString(Address(base58'3P7FFQkgALLZDJpCf3smY517wjgPMswGoRP'), (("art_" + toBase58String(assetId)) + "_type")) {
-    case x: String => 
+    case x: String =>
         5
-    case _ => 
+    case _ =>
         if ((getString(Address(base58'3PFQjjDMiZKQZdu5JqTHD7HwgSXyp9Rw9By'), (("nft_" + toBase58String(assetId)) + "_issuer")) == "3PMki5sHBsQb4KgDknbUwsL3YgxaCzaZnCJ"))
             then 1
             else 0
@@ -80,7 +83,13 @@ func unStake (nftIdStr: String) = {
     let nftOwner = tryGetString((nftIdStr + "_owner"))
     if ((addressStr != nftOwner))
         then throw("you don't have NFT available")
-        else (claimResult(i.caller) ++ [IntegerEntry((addressStr + "_staked"), (stakedAmount - assetPower)), IntegerEntry("global_staked", (tryGetInteger("global_staked") - assetPower)), ScriptTransfer(i.caller, 1, fromBase58String(nftIdStr)), DeleteEntry((nftIdStr + "_owner")), DeleteEntry(((("address_" + toString(i.caller)) + "_nft_") + nftIdStr))])
+        else (claimResult(i.caller) ++ [
+            IntegerEntry((addressStr + "_staked"), (stakedAmount - assetPower)), 
+            IntegerEntry("global_staked", (tryGetInteger("global_staked") - assetPower)), 
+            ScriptTransfer(i.caller, 1, fromBase58String(nftIdStr)), 
+            DeleteEntry((nftIdStr + "_owner")), 
+            DeleteEntry(((("address_" + toString(i.caller)) + "_nft_") + nftIdStr))
+        ])
     }
 
 
@@ -92,22 +101,30 @@ func claimReward () = claimResult(i.caller)
 
 @Callable(i)
 func topUpReward () = {
-    let amount = i.payments[0].amount
-    let assetIdStr = usdnIdStr
-    let currentInterest = tryGetInteger((("global_lastCheck_" + assetIdStr) + "_interest"))
+    let pmtAsset = value(i.payments[0].assetId)
+    let pmtAmount = i.payments[0].amount
+    strict amount = if (pmtAsset == usdnId)
+        then {
+            strict b0 = assetBalance(this, puzzleId)
+            strict inv = invoke(Address(base58'3PBHyEwmERR1CEkrTNbPj2bgyisTfPRqfee'), "exchange", [1], i.payments)
+            strict b1 = assetBalance(this, puzzleId)
+            b1 - b0
+        }
+        else if (pmtAsset == puzzleId)
+            then pmtAmount
+            else throw("not correct asset attached")
+    let currentInterest = tryGetInteger((("global_lastCheck_" + puzzleIdStr) + "_interest"))
     let totalStakedAmount = tryGetInteger("global_staked")
     let interestDelta = if ((totalStakedAmount > 0))
         then fraction(amount, Scale, totalStakedAmount)
         else 0
-    let currentUltraInterest = tryGetInteger("global_lastCheck_ultra_interest")
-    let totalUltraStakedAmount = tryGetInteger("global_ultra_staked")
-    let ultraInterestDelta = if ((totalStakedAmount > 0))
-        then fraction(amount, Scale, totalStakedAmount)
-        else 0
-    if ((i.payments[0].assetId != usdnId))
-        then throw("wrong asset attached")
-        else [IntegerEntry((("global_" + assetIdStr) + "_earnings"), (tryGetInteger((("global_" + assetIdStr) + "_earnings")) + amount)), IntegerEntry((("global_lastCheck_" + assetIdStr) + "_interest"), (currentInterest + interestDelta))]
-    }
+    (
+        [
+            IntegerEntry((("global_" + puzzleIdStr) + "_earnings"), (tryGetInteger((("global_" + puzzleIdStr) + "_earnings")) + amount)), 
+            IntegerEntry((("global_lastCheck_" + puzzleIdStr) + "_interest"), (currentInterest + interestDelta))
+        ], amount
+    )
+}
 
 
 @Verifier(tx)
