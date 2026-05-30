@@ -2,7 +2,7 @@
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 
-let VERSION = "AGGREGATOR-1.0.6 PROD"
+let VERSION = "AGGREGATOR-1.0.7 PROD"
 let CONTRACT_TYPE = "AGGREGATOR"
 
 let usdnIdStr = "DG2xFkPdDwKUoBkzGAhQtLpSGzfXLiCYPEzeKH2Ad24p"
@@ -16,6 +16,12 @@ let pWavesDapp = "3PNfWAt2wdUxjJJKi7gXZTt7CgeP3QWjxAe"
 let managers = [Address(base58'3PMcMiMEs6w56NRGacksXtFG5zS7doE9fpL'), Address(base58'3PMKAL4cd77onkYuuU35115Wov1sLMEcFsv'), Address(base58'3P9xX849YJXg7C87v82cDyDy5VhKiPJpHo8'), Address(base58'3PKHFX6W4aAr1e1b8MUTz5HmdWVUcjWhgY4')]
 let backupReserveFund = "3P4kBiU4wr2yV1S5gMfu3MdkVvy7kxXHsKe"
 let shutdownAddress = Address(base58'3PEpv9hRFWEEBU22WRnLsw1bH4YGtcU728o')
+
+# not used, just for info
+let ALLOWED_POOL_TYPES = ["swopfi", "swopfi_v3", "puzzle", "pz_ranged", "pepe", "wx", "limit", "lend", "pwaves"]
+
+# this types are invoked on hardcoded addresses, so they are always allowed even if whitelist is enabled
+let WHITELISTED_EXEMPT_TYPES = ["wx", "limit", "lend", "pwaves"]
 
 func getFeeAddress() = {
   let reserveFund = getString("setup_universalFeeAddress").valueOrElse(backupReserveFund)
@@ -63,6 +69,26 @@ func poolsPaused() = {
 
 func poolPaused(addressStr: String) = {
   getBoolean(shutdownAddress, "poolShutdown_"+addressStr).valueOrElse(false)
+}
+
+func whitelistEnabled() = {
+  getBoolean(this, "setup_whitelistEnabled").valueOrElse(false)
+}
+
+func poolWhitelisted(addressStr: String, type: String) = {
+  if (!whitelistEnabled() || indexOf(WHITELISTED_EXEMPT_TYPES, type) != unit) then {true} else {
+    let address = if (type == "pepe") then {
+      let pepeArr = addressStr.split("-")
+      pepeArr[0]
+    } else addressStr
+    let whitelistCoordinatorStr = getString(this, "setup_whitelistCoordinator").valueOrElse("")
+    let whitelistCoordinator = if (whitelistCoordinatorStr != "") then addressFromString(whitelistCoordinatorStr) else unit
+    if (whitelistCoordinator != unit) then {
+      getBoolean(whitelistCoordinator.value(), address + "_poolWhitelisted").valueOrElse(false)
+    } else {
+      false
+    }
+  }
 }
 
 func swapPwaves(asset0: String, asset1: String, amount0: Int) = {
@@ -134,7 +160,7 @@ func swapInternal(i: Invocation, routesStr: String, minToReceive: Int, refKey: S
   func doSwap(amount: Int, swap: String) = {
     let swapLi = swap.split(",")
     let (dApp, dAppType, t0Str, t1Str) = (swapLi[0], swapLi[1], swapLi[2], swapLi[3])
-
+    strict _poolWhitelisted = if (poolWhitelisted(dApp, dAppType)) then {true} else {throw("pool " + dApp + ", type " + dAppType + " not whitelisted")}
     let t0 = getAssetBytes(t0Str)
 
     let amount0 = if( amount != 0 ) then amount else getBalance(t0)
@@ -162,8 +188,8 @@ func swapInternal(i: Invocation, routesStr: String, minToReceive: Int, refKey: S
       swapWX(t0Str, t1Str, amount0)
     } else if (dAppType == "limit") then {
         swapLimit(dApp, t0Str, t1Str)
-    } else if (dAppType == "tsunami") then {
-        invoke(Address(tsnContract.fromBase58String()), "swap", [t1Str, 0], [AttachedPayment(t0, amount0)])
+    # } else if (dAppType == "tsunami") then {
+    #     invoke(Address(tsnContract.fromBase58String()), "swap", [t1Str, 0], [AttachedPayment(t0, amount0)])
     } else if (dAppType == "lend") then {
         swapLend(dApp, t0Str, t1Str, amount0)
     } else if (dAppType == "pepe") then {
@@ -289,6 +315,33 @@ func shutdown(val: Boolean) = {
     [
       BooleanEntry("shutdown", val)
     ]
+  }
+}
+
+@Callable(i)
+func setWhitelistCoordinator(coordinator: String) = {
+  if (managers.indexOf(i.caller) == unit) then {throw("admin only")}
+  else {
+    let address = addressFromString(coordinator)
+    if (address == unit) then {throw("invalid address")} else {
+      [
+        StringEntry("setup_whitelistCoordinator", coordinator)
+      ]
+    }
+  }
+}
+
+@Callable(i)
+func setWhitelistEnabled(val: Boolean) = {
+  if (managers.indexOf(i.caller) == unit) then {throw("admin only")}
+  else {
+    let whitelistCoordinatorStr = getString(this, "setup_whitelistCoordinator").valueOrElse("")
+    let whitelistCoordinator = if (whitelistCoordinatorStr != "") then addressFromString(whitelistCoordinatorStr) else unit
+    if (whitelistCoordinator == unit && val) then {throw("set whitelist coordinator first")} else {
+      [
+        BooleanEntry("setup_whitelistEnabled", val)
+      ]
+    }
   }
 }
 
