@@ -19,7 +19,7 @@ let PERIOD_BLOCKS = 1000
 let DEFAULT_GLOBAL_CAP = 1000 * Scale8
 let DEFAULT_ADDRESS_CAP = 700 * Scale8
 
-let k_unstakePeriod = "unstakePeriod" # period in blocks to accumulate unstakes
+let k_unstakePeriod = "setup_unstakePeriod" # period in blocks to accumulate unstakes
 let k_globalUnstakeLimit = "global_unstakeLimit" # 0 - unlimited, absent - defaults to DEFAULT_GLOBAL_CAP
 let k_addressUnstakeLimit = "global_addressUnstakeLimit" # 0 - disabled unstake for user, absent - defaults to DEFAULT_ADDRESS_CAP
 let k_lastUnstakeH = "global_lastUnstakeHeight"
