@@ -2,8 +2,17 @@
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 
-let VERSION = "STLP-1.1.0"
+let VERSION = "STLP-1.1.3"
+let CONTRACT_TYPE = "RANGES_LAYER2"
 let DESCRIPTION = "Single Token Liquidity Provision for Ranges. Described as a 'straightforward approach' in https://medium.com/@izhur27/inventing-ranges-pt-3-single-token-liquidity-provision-59f96c482d11"
+
+let managers = [
+  Address(base58'3PMcMiMEs6w56NRGacksXtFG5zS7doE9fpL'), 
+  Address(base58'3PMKAL4cd77onkYuuU35115Wov1sLMEcFsv'), 
+  Address(base58'3P9xX849YJXg7C87v82cDyDy5VhKiPJpHo8'), 
+  Address(base58'3PKHFX6W4aAr1e1b8MUTz5HmdWVUcjWhgY4'),
+  Address(base58'3PJu3pb7BST5XV7qUiHWDKmrzAkEpDSCewa')
+]
 
 let Scale8 = 100000000
 
@@ -34,11 +43,60 @@ func getTokenBalance(assetId: ByteVector|Unit) = {
 
 func addAssetBytesToList(accum: List[ByteVector], item: String) = { accum ++ [item.getAssetBytes()] }
 
+# load old style parameter
+func _get(poolAdr: Address, assetId: String, param: String) = {
+  getInteger(poolAdr, "global_" + assetId + "_" + param).valueOrElse(0)
+}
+
+# load combined parameter
+func loadGlobalTokenParams(poolAdr: Address, assetId: String) = {
+  match getString(poolAdr, "globalParams_" + assetId) {
+        case p: String =>
+            let params = p.split("__")
+            (
+                params[0].parseIntValue(),   # balance
+                params[1].parseIntValue(),   # factBalance
+                params[2].parseIntValue(),   # feesEarned
+                params[3].parseIntValue(),   # lastCheckInterest
+                params[4].parseIntValue(),   # extraEarned
+                params[5].parseIntValue(),   # selloff 
+                params[6].parseIntValue(),   # selloffStartBalance
+                params[7].parseIntValue()    # selloffStartHeight
+            )
+        case _ => (
+          _get(poolAdr, assetId, "balance"), 
+          _get(poolAdr, assetId, "factBalance"), 
+          0, # feesEarned, not used 
+          0, #lastCheckInterest, not used
+          0, # extraEarned, not used
+          _get(poolAdr, assetId, "selloff"),
+          _get(poolAdr, assetId, "selloffStartBalance"), 
+          _get(poolAdr, assetId, "selloffStartHeight"))
+  }
+}
+
+func whitelistEnabled() = {
+  getBoolean(this, "setup_whitelistEnabled").valueOrElse(false)
+}
+
+func poolWhitelisted(address: String) = {
+  if (!whitelistEnabled()) then {true} else {
+    let whitelistCoordinatorStr = getString(this, "setup_whitelistCoordinator").valueOrElse("")
+    let whitelistCoordinator = if (whitelistCoordinatorStr != "") then addressFromString(whitelistCoordinatorStr) else unit
+    if (whitelistCoordinator != unit) then {
+      getBoolean(whitelistCoordinator.value(), address + "_poolWhitelisted").valueOrElse(false)
+    } else {
+      false
+    }
+  }
+}
 
 ## CALLABLES
 
 @Callable(i)
 func generateWithOneToken(rangeAddressStr: String, needStake: Boolean) = {
+  strict _isShutdown = if (isShutdown()) then throw("Contract " + CONTRACT_TYPE + " is on stop") else true
+  strict _whitelisted = if (!poolWhitelisted(rangeAddressStr)) then throw("Pool " + rangeAddressStr + " is not whitelisted") else true
   let baseAssetId = i.payments[0].assetId
   
   let mainAddress = Address(rangeAddressStr.fromBase58String())
@@ -51,10 +109,11 @@ func generateWithOneToken(rangeAddressStr: String, needStake: Boolean) = {
   let payAmount = i.payments[0].amount
 
   func getAssetW(assetIdStr: String) = {
+    let params = loadGlobalTokenParams(mainAddress, assetIdStr)
     fraction(
       getIntegerValue(mainAddress, "static_" + assetIdStr + "_weight") * Scale8,
-      getIntegerValue(mainAddress, "global_" + assetIdStr + "_factBalance"),
-      getIntegerValue(mainAddress, "global_" + assetIdStr + "_balance")
+      params._2, # factBalance
+      params._1 # balance
     )
   }
 
@@ -97,3 +156,84 @@ func generateWithOneToken(rangeAddressStr: String, needStake: Boolean) = {
     ]
   }
 }
+
+@Callable(i)
+func setWhitelistCoordinator(coordinator: String) = {
+  if (managers.indexOf(i.caller) == unit) then {throw("admin only")}
+  else {
+    let address = addressFromString(coordinator)
+    if (address == unit) then {throw("invalid address")} else {
+      [
+        StringEntry("setup_whitelistCoordinator", coordinator)
+      ]
+    }
+  }
+}
+
+@Callable(i)
+func setWhitelistEnabled(val: Boolean) = {
+  if (managers.indexOf(i.caller) == unit) then {throw("admin only")}
+  else {
+    let whitelistCoordinatorStr = getString(this, "setup_whitelistCoordinator").valueOrElse("")
+    let whitelistCoordinator = if (whitelistCoordinatorStr != "") then addressFromString(whitelistCoordinatorStr) else unit
+    if (whitelistCoordinator == unit && val) then {throw("set whitelist coordinator first")} else {
+      [
+        BooleanEntry("setup_whitelistEnabled", val)
+      ]
+    }
+  }
+}
+
+@Callable(i)
+func setApproverAddress(approverAddress: String) = {
+  # Allows empty string as address to disable approver contract, but if address is set it must be correct and have multisig initialized with admins
+  strict isSelf = if (i.caller == this) then true else throw("Only self invoke")
+  let _approverAddress = addressFromString(approverAddress)
+  let approverOk = match (_approverAddress) {
+      case t:Address => true
+      case _ => false
+    }
+  strict canSetApprover = if (approverOk || approverAddress == "") then true else throw("Wrong approver address")
+  let isInited = getBoolean(_approverAddress.value(), "INITED").valueOrElse(false)
+  let hasAdmins = getString(_approverAddress.value(), "ADMINS_PBKS").valueOrElse("") != ""
+  strict isApproverContract = if (approverAddress == "" || isInited && hasAdmins) then true else throw("Address is not approver contract")
+  [StringEntry("APPROVER_ADDRESS", approverAddress)]
+}
+
+@Verifier(tx)
+func verify() = {
+  let multisigStr = getString("APPROVER_ADDRESS").valueOrElse("")
+  let multisigAddress = addressFromString(multisigStr)
+  let multisigOk = match (multisigAddress) {
+      case t:Address => true
+      case _ => false
+    }
+
+  let isInited = if (multisigOk) then getBoolean(multisigAddress.value(), "INITED").valueOrElse(false) else false
+  let hasAdmins = if (multisigOk) then getString(multisigAddress.value(), "ADMINS_PBKS").valueOrElse("") != "" else false
+  if (multisigOk && isInited && hasAdmins) then { # verify with multisig
+    match tx {
+      case ttx:SetScriptTransaction => {
+        match ttx.script {
+          case script: ByteVector =>
+            let scriptHasha = blake2b256(script).toBase58String()
+            let validFrom = getInteger(multisigAddress.value(), "script%%" + CONTRACT_TYPE + "%%" + scriptHasha + "%%validFrom").valueOrErrorMessage("validFrom not set")
+            let validTo = getInteger(multisigAddress.value(), "script%%" + CONTRACT_TYPE + "%%" + scriptHasha + "%%validTo").valueOrErrorMessage("validTo not set")
+            let notSameScript = if (this.scriptHash() == blake2b256(script)) then throw("Same script, rejecting") else true
+            let feeOk = if (ttx.fee > 12000000) then throw("Too big fee") else true
+            height >= validFrom && height <= validTo && notSameScript && feeOk
+          case _ => false  # Reject SetScript(null) explicitly
+        }
+      }
+      case otx => {
+        let taskId = "tx_" + this.toString() + "_" + toBase58String(otx.id)
+        let isApproved = getBoolean(multisigAddress.value(), this.toString() + "_" + toBase58String(otx.id) + "__approved").valueOrElse(false)
+        let approvedFrom = getInteger(multisigAddress.value(), taskId + "__approvedFrom").valueOrElse(0)
+        isApproved && height >= approvedFrom
+      }
+    } 
+  } else { # verify with default method for given contract
+    sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
+  }
+}
+
