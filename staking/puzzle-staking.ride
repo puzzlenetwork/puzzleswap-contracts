@@ -1,9 +1,11 @@
 {-# STDLIB_VERSION 6 #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 {-# CONTENT_TYPE DAPP #-}
-{-# IMPORT artifacts/mainnet.ride #-}
 
-let VERSION = "PZSTAKING-1.1.0"
+let VERSION = "PZSTAKING-1.1.6"
+let CONTRACT_TYPE = "PZ_STAKING"
+
+let managers = [Address(base58'3PMcMiMEs6w56NRGacksXtFG5zS7doE9fpL'), Address(base58'3PMKAL4cd77onkYuuU35115Wov1sLMEcFsv'), Address(base58'3P9xX849YJXg7C87v82cDyDy5VhKiPJpHo8'), Address(base58'3PKHFX6W4aAr1e1b8MUTz5HmdWVUcjWhgY4'), Address(base58'3PJu3pb7BST5XV7qUiHWDKmrzAkEpDSCewa')]
 
 let usdnId = base58'DG2xFkPdDwKUoBkzGAhQtLpSGzfXLiCYPEzeKH2Ad24p'
 let usdnIdStr = "DG2xFkPdDwKUoBkzGAhQtLpSGzfXLiCYPEzeKH2Ad24p"
@@ -11,6 +13,17 @@ let puzzleId = base58'HEB8Qaw9xrWpWs8tHsiATYGBWDBtP2S7kcPALrMu43AS'
 let puzzleIdStr = "HEB8Qaw9xrWpWs8tHsiATYGBWDBtP2S7kcPALrMu43AS"
 
 let Scale = 1000000000000
+let Scale8 = 100000000
+
+let PERIOD_BLOCKS = 1000
+let DEFAULT_GLOBAL_CAP = 1000 * Scale8
+let DEFAULT_ADDRESS_CAP = 700 * Scale8
+
+let k_unstakePeriod = "setup_unstakePeriod" # period in blocks to accumulate unstakes
+let k_globalUnstakeLimit = "global_unstakeLimit" # 0 - unlimited, absent - defaults to DEFAULT_GLOBAL_CAP
+let k_addressUnstakeLimit = "global_addressUnstakeLimit" # 0 - disabled unstake for user, absent - defaults to DEFAULT_ADDRESS_CAP
+let k_lastUnstakeH = "global_lastUnstakeHeight"
+let k_globalUnstaked = "global_unstaked"
 
 func tryGetInteger (key: String) = match getInteger(this, key) {
     case b: Int => 
@@ -46,9 +59,49 @@ func claimAliasResult (address: Address, assetIdStr: String) = {
 func claimResult (address: Address) = (claimAliasResult(address, usdnIdStr) ++ claimAliasResult(address, puzzleIdStr))
 
 
+func isShutdown() = {
+    getBoolean("setup_shutdown").valueOrElse(false)
+}
+
+func unstakeLimitOperations(address: String, amount: Int) = {
+  let period = getInteger(k_unstakePeriod).valueOrElse(PERIOD_BLOCKS)
+  let globalLimit = getInteger(k_globalUnstakeLimit).valueOrElse(DEFAULT_GLOBAL_CAP)
+  let addressLimit = getInteger(address + "_unstake_limit").valueOrElse(getInteger(k_addressUnstakeLimit).valueOrElse(DEFAULT_ADDRESS_CAP))
+  strict _periodOk = if (period <= 0) then throw("wrong unstake period") else true
+  strict _addressEnabled = if (addressLimit == 0) then throw("unstake disabled for " + address) else true
+
+  let globalLastH = tryGetInteger(k_lastUnstakeH)
+  let globalExpired = globalLastH == 0 || height >= globalLastH + period
+  let globalH = if (globalExpired) then height else globalLastH
+  let globalUsed = if (globalExpired) then amount else tryGetInteger(k_globalUnstaked) + amount
+  let _available = globalLimit - (globalUsed - amount)
+  let _blocksLeft = globalH + period - height
+  strict _globalLimitOk = if (globalLimit > 0 && globalUsed > globalLimit) then throw("global unstake limit exceeded, puzzleLeft: " + _available.toString() + ", blocksLeft: " + _blocksLeft.toString() + ", cap: " + globalLimit.toString()) else true
+
+  let addressLastKey = address + "_lastUnstakeHeight"
+  let addressUsedKey = address + "_unstaked"
+  let addressLastH = tryGetInteger(addressLastKey)
+  let addressExpired = addressLastH == 0 || height >= addressLastH + period
+  let addressH = if (addressExpired) then height else addressLastH
+  let addressUsed = if (addressExpired) then amount else tryGetInteger(addressUsedKey) + amount
+  let _Uavailable = addressLimit - (addressUsed - amount)
+  let _UblocksLeft = addressH + period - height
+  strict _addressLimitOk = if (addressUsed > addressLimit) then throw("address unstake limit exceeded, puzzleLeft: " + _Uavailable.toString() + ", blocksLeft: " + _UblocksLeft.toString() + ", cap: " + addressLimit.toString()) else true
+
+  [
+    IntegerEntry(k_lastUnstakeH, globalH),
+    IntegerEntry(k_globalUnstaked, globalUsed),
+    IntegerEntry(addressLastKey, addressH),
+    IntegerEntry(addressUsedKey, addressUsed)
+  ]
+}
+
 @Callable(i)
 func stake () = {
+    strict _isShutdown = if (isShutdown()) then throw(CONTRACT_TYPE + " is stopped") else false
+    strict _paymentCheck = if (i.payments.size() != 1) then throw("Only 1 payment should be attached") else true
     let amount = i.payments[0].amount
+    strict _amountOk = if (amount <= 0) then throw("Invalid payment amount attached") else true
     let addressStr = toString(i.caller)
     let totalStakedAmount = tryGetInteger("global_staked")
     if ((i.payments[0].assetId != puzzleId))
@@ -65,7 +118,10 @@ func stake () = {
 
 @Callable(i)
 func stakeFor (addressStr: String) = {
+    strict _isShutdown = if (isShutdown()) then throw(CONTRACT_TYPE + " is stopped") else false
+    strict _paymentCheck = if (i.payments.size() != 1) then throw("Only 1 payment should be attached") else true
     let amount = i.payments[0].amount
+    strict _amountOk = if (amount <= 0) then throw("Invalid payment amount attached") else true
     let totalStakedAmount = tryGetInteger("global_staked")
     if ((i.payments[0].assetId != puzzleId))
         then throw("wrong asset attached")
@@ -82,35 +138,41 @@ func stakeFor (addressStr: String) = {
 
 @Callable(i)
 func unStake(amount: Int) = {
+    strict _isShutdown = if (isShutdown()) then throw(CONTRACT_TYPE + " is stopped") else false
     let addressStr = toString(i.caller)
     let stakedAmount = tryGetInteger((addressStr + "_staked"))
-    if ((amount > stakedAmount))
+  if (amount <= 0)
+    then throw("amount should be positive")
+    else if ((amount > stakedAmount))
         then throw("you don't have tokens available")
         else (
             claimResult(i.caller) ++ 
             [
                 IntegerEntry((addressStr + "_staked"), (stakedAmount - amount)), 
                 IntegerEntry("global_staked", (tryGetInteger("global_staked") - amount)), 
-                ScriptTransfer(i.caller, amount, puzzleId)]
+        ScriptTransfer(i.caller, amount, puzzleId)] ++
+      unstakeLimitOperations(addressStr, amount)
         )
 }
 
 
 
 @Callable(i)
-func claimReward () = claimResult(i.caller)
+func claimReward () = {
+    strict _isShutdown = if (isShutdown()) then throw(CONTRACT_TYPE + " is stopped") else false
+    claimResult(i.caller)
+}
 
 
 
 @Callable(i)
 func topUpReward () = {
+    # strict _isShutdown = if (isShutdown()) then throw(CONTRACT_TYPE + " is stopped") else false
+    strict _paymentCheck = if (i.payments.size() != 1) then throw("Only 1 payment should be attached") else true
     let pmtAsset = i.payments[0].assetId.value()
     let pmtAmount = i.payments[0].amount
+    strict _amountOk = if (pmtAmount <= 0) then throw("Invalid payment amount attached") else true
     strict amount = if pmtAsset == usdnId then {
-        # strict b0 = assetBalance(this, puzzleId)
-        # strict inv = invoke(Address(base58'3PBHyEwmERR1CEkrTNbPj2bgyisTfPRqfee'), "exchange", [1], i.payments)
-        # strict b1 = assetBalance(this, puzzleId)
-        # b1 - b0
         0
     } else if pmtAsset == puzzleId then { pmtAmount }
     else {throw("not correct asset attached")}
@@ -133,5 +195,67 @@ func topUpReward () = {
 }
 
 
+@Callable(i)
+func shutdown(val: Boolean) = {
+  if (managers.indexOf(i.caller) == unit) then {throw("admin only")}
+  else {
+    [
+      BooleanEntry("setup_shutdown", val)
+    ]
+  }
+}
+
+@Callable(i)
+func setApproverAddress(approverAddress: String) = {
+  # Allows empty string as address to disable approver contract, but if address is set it must be correct and have multisig initialized with admins
+  strict isSelf = if (i.caller == this) then true else throw("Only self invoke")
+  let _approverAddress = addressFromString(approverAddress)
+  let approverOk = match (_approverAddress) {
+      case t:Address => true
+      case _ => false
+    }
+  strict canSetApprover = if (approverOk || approverAddress == "") then true else throw("Wrong approver address")
+  let isInited = getBoolean(_approverAddress.value(), "INITED").valueOrElse(false)
+  let hasAdmins = getString(_approverAddress.value(), "ADMINS_PBKS").valueOrElse("") != ""
+  strict isApproverContract = if (approverAddress == "" || isInited && hasAdmins) then true else throw("Address is not approver contract")
+  [StringEntry("APPROVER_ADDRESS", approverAddress)]
+}
+
+
 @Verifier(tx)
-func verify () = sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
+func verify() = {
+  let multisigStr = getString("APPROVER_ADDRESS").valueOrElse("")
+  let multisigAddress = addressFromString(multisigStr)
+  let multisigOk = match (multisigAddress) {
+      case t:Address => true
+      case _ => false
+    }
+
+  let isInited = if (multisigOk) then getBoolean(multisigAddress.value(), "INITED").valueOrElse(false) else false
+  let hasAdmins = if (multisigOk) then getString(multisigAddress.value(), "ADMINS_PBKS").valueOrElse("") != "" else false
+  if (multisigOk && isInited && hasAdmins) then { # verify with multisig
+    match tx {
+      case ttx:SetScriptTransaction => {
+        match ttx.script {
+          case script: ByteVector =>
+            let scriptHasha = blake2b256(script).toBase58String()
+            let validFrom = getInteger(multisigAddress.value(), "script%%" + CONTRACT_TYPE + "%%" + scriptHasha + "%%validFrom").valueOrErrorMessage("validFrom not set")
+            let validTo = getInteger(multisigAddress.value(), "script%%" + CONTRACT_TYPE + "%%" + scriptHasha + "%%validTo").valueOrErrorMessage("validTo not set")
+            let notSameScript = if (this.scriptHash() == blake2b256(script)) then throw("Same script, rejecting") else true
+            let feeOk = if (ttx.fee > 12000000) then throw("Too big fee") else true
+            height >= validFrom && height <= validTo && notSameScript && feeOk
+          case _ => false  # Reject SetScript(null) explicitly
+        }
+      }
+      case otx => {
+        let taskId = "tx_" + this.toString() + "_" + toBase58String(otx.id)
+        let isApproved = getBoolean(multisigAddress.value(), this.toString() + "_" + toBase58String(otx.id) + "__approved").valueOrElse(false)
+        let approvedFrom = getInteger(multisigAddress.value(), taskId + "__approvedFrom").valueOrElse(0)
+        isApproved && height >= approvedFrom
+      }
+    } 
+  } else { # verify with default method for given contract
+    sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
+  }
+}
+
