@@ -1,6 +1,14 @@
 {-# STDLIB_VERSION 6 #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 {-# CONTENT_TYPE DAPP #-}
+
+let VERSION = "ULTRA_STAKING-1.0.5"
+let CONTRACT_TYPE = "ULTRA_STAKING"
+
+let k_validitySource = "global_validitySource"
+
+let managers = [Address(base58'3PMcMiMEs6w56NRGacksXtFG5zS7doE9fpL'), Address(base58'3PMKAL4cd77onkYuuU35115Wov1sLMEcFsv'), Address(base58'3P9xX849YJXg7C87v82cDyDy5VhKiPJpHo8'), Address(base58'3PKHFX6W4aAr1e1b8MUTz5HmdWVUcjWhgY4'), Address(base58'3PJu3pb7BST5XV7qUiHWDKmrzAkEpDSCewa')]
+
 let usdnId = base58'DG2xFkPdDwKUoBkzGAhQtLpSGzfXLiCYPEzeKH2Ad24p'
 
 let usdnIdStr = "DG2xFkPdDwKUoBkzGAhQtLpSGzfXLiCYPEzeKH2Ad24p"
@@ -45,7 +53,7 @@ func claimAliasResult (address: Address, assetIdStr: String) = {
 func claimResult (address: Address) = (claimAliasResult(address, usdnIdStr) ++ claimAliasResult(address, puzzleIdStr))
 
 
-func checkNFTValidity (assetId: ByteVector) = match getString(Address(base58'3P7FFQkgALLZDJpCf3smY517wjgPMswGoRP'), (("art_" + toBase58String(assetId)) + "_type")) {
+func checkNFTValidityExternal (assetId: ByteVector) = match getString(Address(base58'3P7FFQkgALLZDJpCf3smY517wjgPMswGoRP'), (("art_" + toBase58String(assetId)) + "_type")) {
     case x: String =>
         5
     case _ =>
@@ -54,9 +62,28 @@ func checkNFTValidity (assetId: ByteVector) = match getString(Address(base58'3P7
             else 0
 }
 
+func checkNFTValidityLocal(nftIdStr: String) = {
+    getInteger(nftIdStr + "_power").valueOrElse(0)
+}
+
+func checkNFTValidity(assetId: ByteVector) = {
+    let validitySource = getString(k_validitySource).valueOrElse("")
+    if (validitySource == "local") then {
+        checkNFTValidityLocal(toBase58String(assetId))
+    } else {
+        checkNFTValidityExternal(assetId)
+    }
+}
+
+
+func isShutdown() = {
+    getBoolean(this, "setup_shutdown").valueOrElse(false)
+}
+
 
 @Callable(i)
 func stake () = {
+    strict _isShutdown = if (isShutdown()) then throw(CONTRACT_TYPE + " is stopped") else false
     let addressStr = toString(i.caller)
     let nftId = if ((i.payments[0].amount == 1))
         then value(i.payments[0].assetId)
@@ -70,13 +97,20 @@ func stake () = {
         else "Ania NFT"
     if ((assetPower == 0))
         then throw("not valid NFT attached")
-        else (claimResult(i.caller) ++ [IntegerEntry("global_staked", (totalStakedAmount + assetPower)), IntegerEntry((addressStr + "_staked"), (tryGetInteger((addressStr + "_staked")) + assetPower)), StringEntry((toBase58String(nftId) + "_owner"), addressStr), IntegerEntry(((("address_" + toString(i.caller)) + "_nft_") + toBase58String(nftId)), lastBlock.timestamp), StringEntry((toBase58String(nftId) + "_name"), NFTName)])
+        else (claimResult(i.caller) ++ [
+            IntegerEntry("global_staked", (totalStakedAmount + assetPower)), 
+            IntegerEntry((addressStr + "_staked"), (tryGetInteger((addressStr + "_staked")) + assetPower)), 
+            StringEntry((toBase58String(nftId) + "_owner"), addressStr), 
+            IntegerEntry(((("address_" + toString(i.caller)) + "_nft_") + toBase58String(nftId)), lastBlock.timestamp), 
+            StringEntry((toBase58String(nftId) + "_name"), NFTName)
+        ])
     }
 
 
 
 @Callable(i)
 func unStake (nftIdStr: String) = {
+    strict _isShutdown = if (isShutdown()) then throw(CONTRACT_TYPE + " is stopped") else false
     let assetPower = fraction(10000, checkNFTValidity(fromBase58String(nftIdStr)), 5)
     let addressStr = toString(i.caller)
     let stakedAmount = tryGetInteger((addressStr + "_staked"))
@@ -88,6 +122,7 @@ func unStake (nftIdStr: String) = {
             IntegerEntry("global_staked", (tryGetInteger("global_staked") - assetPower)), 
             ScriptTransfer(i.caller, 1, fromBase58String(nftIdStr)), 
             DeleteEntry((nftIdStr + "_owner")), 
+            DeleteEntry((nftIdStr + "_name")), 
             DeleteEntry(((("address_" + toString(i.caller)) + "_nft_") + nftIdStr))
         ])
     }
@@ -95,12 +130,16 @@ func unStake (nftIdStr: String) = {
 
 
 @Callable(i)
-func claimReward () = claimResult(i.caller)
+func claimReward () = {
+    strict _isShutdown = if (isShutdown()) then throw(CONTRACT_TYPE + " is stopped") else false
+    claimResult(i.caller)
+}
 
 
 
 @Callable(i)
 func topUpReward () = {
+    # strict _isShutdown = if (isShutdown()) then throw(CONTRACT_TYPE + " is stopped") else false
     let pmtAsset = value(i.payments[0].assetId)
     let pmtAmount = i.payments[0].amount
     strict amount = if (pmtAsset == usdnId)
@@ -113,6 +152,7 @@ func topUpReward () = {
         else if (pmtAsset == puzzleId)
             then pmtAmount
             else throw("not correct asset attached")
+    strict _amountOk = if (amount <= 0) then throw( "Invalid amount after swap: " + amount.toString()) else true
     let currentInterest = tryGetInteger((("global_lastCheck_" + puzzleIdStr) + "_interest"))
     let totalStakedAmount = tryGetInteger("global_staked")
     let interestDelta = if ((totalStakedAmount > 0))
@@ -127,5 +167,88 @@ func topUpReward () = {
 }
 
 
+@Callable(i)
+func shutdown(val: Boolean) = {
+  if (managers.indexOf(i.caller) == unit) then {throw("admin only")}
+  else {
+    [
+      BooleanEntry("setup_shutdown", val)
+    ]
+  }
+}
+
+@Callable(i)
+func registerNft(nftIds: List[String]) = {
+    func f(accum: List[IntegerEntry], el: String) = {
+        let currentPower = getInteger(el + "_power").valueOrElse(0)
+        if (currentPower != 0) then accum else {
+            let externalPower = checkNFTValidityExternal(fromBase58String(el))
+            if (externalPower == 0) then accum else {
+                accum ++ [IntegerEntry(el + "_power", externalPower)]
+            }
+        }
+    }
+
+    if (managers.indexOf(i.caller) == unit) then {throw("admin only")}
+    else {
+        strict _checkPhase = if (tryGetString(k_validitySource) == "local") then throw("Registering NFTS is not available when local velidity source is enabled") else true
+        strict _checkLen = if (size(nftIds) > 60) then throw("60 elements max per call") else true
+        FOLD<60>(nftIds, [], f)
+    }
+}
+
+@Callable(i)
+func setApproverAddress(approverAddress: String) = {
+  # Allows empty string as address to disable approver contract, but if address is set it must be correct and have multisig initialized with admins
+  strict isSelf = if (i.caller == this) then true else throw("Only self invoke")
+  let _approverAddress = addressFromString(approverAddress)
+  let approverOk = match (_approverAddress) {
+      case t:Address => true
+      case _ => false
+    }
+  strict canSetApprover = if (approverOk || approverAddress == "") then true else throw("Wrong approver address")
+  let isInited = getBoolean(_approverAddress.value(), "INITED").valueOrElse(false)
+  let hasAdmins = getString(_approverAddress.value(), "ADMINS_PBKS").valueOrElse("") != ""
+  strict isApproverContract = if (approverAddress == "" || isInited && hasAdmins) then true else throw("Address is not approver contract")
+  [StringEntry("APPROVER_ADDRESS", approverAddress)]
+}
+
+
 @Verifier(tx)
-func verify () = sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
+func verify() = {
+  let multisigStr = getString("APPROVER_ADDRESS").valueOrElse("")
+  let multisigAddress = addressFromString(multisigStr)
+  let multisigOk = match (multisigAddress) {
+      case t:Address => true
+      case _ => false
+    }
+
+  let isInited = if (multisigOk) then getBoolean(multisigAddress.value(), "INITED").valueOrElse(false) else false
+  let hasAdmins = if (multisigOk) then getString(multisigAddress.value(), "ADMINS_PBKS").valueOrElse("") != "" else false
+  if (multisigOk && isInited && hasAdmins) then { # verify with multisig
+    match tx {
+      case ttx:SetScriptTransaction => {
+        match ttx.script {
+          case script: ByteVector =>
+            let scriptHasha = blake2b256(script).toBase58String()
+            let validFrom = getInteger(multisigAddress.value(), "script%%" + CONTRACT_TYPE + "%%" + scriptHasha + "%%validFrom").valueOrErrorMessage("validFrom not set")
+            let validTo = getInteger(multisigAddress.value(), "script%%" + CONTRACT_TYPE + "%%" + scriptHasha + "%%validTo").valueOrErrorMessage("validTo not set")
+            let notSameScript = if (this.scriptHash() == blake2b256(script)) then throw("Same script, rejecting") else true
+            let feeOk = if (ttx.fee > 12000000) then throw("Too big fee") else true
+            height >= validFrom && height <= validTo && notSameScript && feeOk
+          case _ => false  # Reject SetScript(null) explicitly
+        }
+      }
+      case otx => {
+        let taskId = "tx_" + this.toString() + "_" + toBase58String(otx.id)
+        let isApproved = getBoolean(multisigAddress.value(), this.toString() + "_" + toBase58String(otx.id) + "__approved").valueOrElse(false)
+        let approvedFrom = getInteger(multisigAddress.value(), taskId + "__approvedFrom").valueOrElse(0)
+        isApproved && height >= approvedFrom
+      }
+    } 
+  } else { # verify with default method for given contract
+    sigVerify(tx.bodyBytes, tx.proofs[0], tx.senderPublicKey)
+  }
+}
+
+
