@@ -2,7 +2,7 @@
 {-# CONTENT_TYPE DAPP #-}
 {-# SCRIPT_TYPE ACCOUNT #-}
 
-let VERSION = "STLP-1.1.6"
+let VERSION = "STLP-1.1.7"
 let CONTRACT_TYPE = "RANGES_LAYER2"
 let DESCRIPTION = "Single Token Liquidity Provision for Ranges. Described as a 'straightforward approach' in https://medium.com/@izhur27/inventing-ranges-pt-3-single-token-liquidity-provision-59f96c482d11"
 
@@ -97,6 +97,8 @@ func generateWithOneTokenInternal(i: Invocation, rangeAddressStr: String, needSt
   strict _isShutdown = if (isShutdown()) then throw("Contract " + CONTRACT_TYPE + " is on stop") else true
   strict _whitelisted = if (!poolWhitelisted(rangeAddressStr)) then throw("Pool " + rangeAddressStr + " is not whitelisted") else true
   strict _payments = if (i.payments.size() != 1) then throw("attach exactly one payment with the token to be used for liquidity provision") else true
+  strict _positive = if (i.payments[0].amount <= 0) then throw("attached payment must be positive") else true
+  
   let baseAssetId = i.payments[0].assetId
   
   let mainAddress = Address(rangeAddressStr.fromBase58String())
@@ -184,7 +186,7 @@ func redeemWithOneToken(rangeAddressStr: String, outAssetIdStr: String) = {
   strict _whitelisted = if (!poolWhitelisted(rangeAddressStr)) then throw("Pool " + rangeAddressStr + " is not whitelisted") else true
 
   strict _onePayment = if (i.payments.size() != 1) then throw("attach exactly one payment with the pool index token") else true
-
+  strict _positive = if (i.payments[0].amount <= 0) then throw("attached payment must be positive") else true
   let mainAddress = Address(rangeAddressStr.fromBase58String())
   let assetIds = FOLD<10>(getStringValue(mainAddress, "static_tokenIds").split(","), [], addAssetBytesToList)
   let baseAssetId = outAssetIdStr.getAssetBytes()
