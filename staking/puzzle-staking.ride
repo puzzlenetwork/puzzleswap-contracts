@@ -2,7 +2,7 @@
 {-# SCRIPT_TYPE ACCOUNT #-}
 {-# CONTENT_TYPE DAPP #-}
 
-let VERSION = "PZSTAKING-1.1.6"
+let VERSION = "PZSTAKING-1.1.7"
 let CONTRACT_TYPE = "PZ_STAKING"
 
 let managers = [Address(base58'3PMcMiMEs6w56NRGacksXtFG5zS7doE9fpL'), Address(base58'3PMKAL4cd77onkYuuU35115Wov1sLMEcFsv'), Address(base58'3P9xX849YJXg7C87v82cDyDy5VhKiPJpHo8'), Address(base58'3PKHFX6W4aAr1e1b8MUTz5HmdWVUcjWhgY4'), Address(base58'3PJu3pb7BST5XV7qUiHWDKmrzAkEpDSCewa')]
@@ -73,20 +73,34 @@ func unstakeLimitOperations(address: String, amount: Int) = {
   let globalLastH = tryGetInteger(k_lastUnstakeH)
   let globalExpired = globalLastH == 0 || height >= globalLastH + period
   let globalH = if (globalExpired) then height else globalLastH
-  let globalUsed = if (globalExpired) then amount else tryGetInteger(k_globalUnstaked) + amount
-  let _available = globalLimit - (globalUsed - amount)
+  let globalPriorUsed = if (globalExpired) then 0 else tryGetInteger(k_globalUnstaked)
+  let globalUsed = globalPriorUsed + amount
+  let globalAvailable = globalLimit - globalPriorUsed
   let _blocksLeft = globalH + period - height
-  strict _globalLimitOk = if (globalLimit > 0 && globalUsed > globalLimit) then throw("global unstake limit exceeded, puzzleLeft: " + _available.toString() + ", blocksLeft: " + _blocksLeft.toString() + ", cap: " + globalLimit.toString()) else true
+  strict _globalLimitOk = if (globalLimit > 0 && globalUsed > globalLimit) then throw(
+    "unstake limit exceeded" +
+    ": requested=" + fraction(amount, 1, Scale8).toString() +
+    ", available=" + fraction(globalAvailable, 1, Scale8).toString() +
+    ", periodCap=" + fraction(globalLimit, 1, Scale8).toString() +
+    ", resetsInBlocks=" + _blocksLeft.toString()
+  ) else true
 
   let addressLastKey = address + "_lastUnstakeHeight"
   let addressUsedKey = address + "_unstaked"
   let addressLastH = tryGetInteger(addressLastKey)
   let addressExpired = addressLastH == 0 || height >= addressLastH + period
   let addressH = if (addressExpired) then height else addressLastH
-  let addressUsed = if (addressExpired) then amount else tryGetInteger(addressUsedKey) + amount
-  let _Uavailable = addressLimit - (addressUsed - amount)
+  let addressPriorUsed = if (addressExpired) then 0 else tryGetInteger(addressUsedKey)
+  let addressUsed = addressPriorUsed + amount
+  let addressAvailable = addressLimit - addressPriorUsed
   let _UblocksLeft = addressH + period - height
-  strict _addressLimitOk = if (addressUsed > addressLimit) then throw("address unstake limit exceeded, puzzleLeft: " + _Uavailable.toString() + ", blocksLeft: " + _UblocksLeft.toString() + ", cap: " + addressLimit.toString()) else true
+  strict _addressLimitOk = if (addressUsed > addressLimit) then throw(
+    "unstake limit exceeded for " + address +
+    ": requested=" + fraction(amount, 1, Scale8).toString() +
+    ", available=" + fraction(addressAvailable, 1, Scale8).toString() +
+    ", periodCap=" + fraction(addressLimit, 1, Scale8).toString() +
+    ", resetsInBlocks=" + _UblocksLeft.toString()
+  ) else true
 
   [
     IntegerEntry(k_lastUnstakeH, globalH),
